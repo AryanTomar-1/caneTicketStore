@@ -11,9 +11,11 @@ import {
   Alert,
   ActivityIndicator,
   KeyboardTypeOptions,
-  SafeAreaView,
   PanResponder,
 } from 'react-native';
+import { STEPS } from '../../constants/steps';
+import { useMicPulse, useSpeakerPulse } from '../../hooks/useMicPulse';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Speech from 'expo-speech';
 import {
@@ -21,86 +23,8 @@ import {
   useSpeechRecognitionEvent,
 } from 'expo-speech-recognition';
 import { saveTicket } from '../../utils/storage';
+import { FormData, ConfirmedValues } from '../../types';
 
-// ─── Types ───────────────────────────────────────────────────────────────────
-
-interface Step {
-  key: keyof FormData;
-  label: string;
-  labelHindi: string;
-  promptHindi: string;
-  promptEn: string;
-  speak: string;
-  placeholder: string;
-  keyboardType: KeyboardTypeOptions;
-  multiline?: boolean;
-}
-
-interface FormData {
-  name: string;
-  fatherName: string;
-  date: string;
-  quantity: string;
-  comment: string;
-}
-
-type ConfirmedValues = Partial<FormData>;
-
-// ─── Constants ───────────────────────────────────────────────────────────────
-
-const STEPS: Step[] = [
-  {
-    key: 'name',
-    label: 'Name',
-    labelHindi: 'नाम',
-    promptHindi: 'कृपया व्यक्ति का नाम दर्ज करें।',
-    promptEn: "Please say the person's name (Hindi or English).",
-    speak: 'Please say the name of the person.',
-    placeholder: 'नाम / Name',
-    keyboardType: 'default',
-  },
-  {
-    key: 'fatherName',
-    label: 'Father Name',
-    labelHindi: 'पिता का नाम',
-    promptHindi: 'कृपया पिता का नाम दर्ज करें।',
-    promptEn: "Please say the father's name.",
-    speak: "Please say the father's name.",
-    placeholder: 'पिता का नाम / Father Name',
-    keyboardType: 'default',
-  },
-  {
-    key: 'date',
-    label: 'Date',
-    labelHindi: 'तारीख',
-    promptHindi: 'तारीख दर्ज करें (DD/MM/YYYY)',
-    promptEn: 'Enter date in DD/MM/YYYY format.',
-    speak: 'Please enter the date.',
-    placeholder: 'DD/MM/YYYY',
-    keyboardType: 'numeric',
-  },
-  {
-    key: 'quantity',
-    label: 'Quantity',
-    labelHindi: 'मात्रा (क्विंटल)',
-    promptHindi: 'मात्रा दर्ज करें (दशमलव मान्य है)',
-    promptEn: 'Say the quantity. Decimal numbers allowed, e.g. 12.5',
-    speak: 'Please say the quantity.',
-    placeholder: 'मात्रा / Quantity (e.g. 12.5)',
-    keyboardType: 'numeric',
-  },
-  {
-    key: 'comment',
-    label: 'Comment',
-    labelHindi: 'टिप्पणी',
-    promptHindi: 'कोई टिप्पणी दर्ज करें (वैकल्पिक)',
-    promptEn: 'Add any comment or note (optional).',
-    speak: 'Please add any comment or note. This is optional.',
-    placeholder: 'टिप्पणी / Comment (optional)',
-    keyboardType: 'default',
-    multiline: true,
-  },
-];
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
 
@@ -129,7 +53,7 @@ const isValidDate = (value: string): boolean => {
 
 export default function VoiceInputScreen(): React.ReactElement {
   const [currentStep, setCurrentStep] = useState<number>(0);
-  const [formData, setFormData] = useState<FormData>({ name: '', fatherName: '', date: '', quantity: '', comment: '' });
+  const [formData, setFormData] = useState<FormData>({ farmer_code: '', name: '', fatherName: '', date: '', quantity: '', comment: '' });
   const [inputValue, setInputValue] = useState<string>('');
   const [isSpeaking, setIsSpeaking] = useState<boolean>(false);
   const [isListening, setIsListening] = useState<boolean>(false);
@@ -142,24 +66,25 @@ export default function VoiceInputScreen(): React.ReactElement {
 
   const pulseAnim = useRef<Animated.Value>(new Animated.Value(1)).current;
   const micPulseAnim = useRef<Animated.Value>(new Animated.Value(1)).current;
-  const pulseLoop = useRef<Animated.CompositeAnimation | null>(null);
-  const micPulseLoop = useRef<Animated.CompositeAnimation | null>(null);
+
+  const mic = useMicPulse();
+  const speaker = useSpeakerPulse();
 
   // ── STT listeners ─────────────────────────────────────────────────────────
   useSpeechRecognitionEvent('start', () => { setIsListening(true); setMicError(''); });
-  useSpeechRecognitionEvent('end', () => { setIsListening(false); stopMicPulse(); });
+  useSpeechRecognitionEvent('end', () => { setIsListening(false); mic.stop(); });
   useSpeechRecognitionEvent('result', (event) => {
     const result = event.results[0]?.transcript ?? '';
     if (result) setInputValue(cleanForStep(result, currentStep));
   });
   useSpeechRecognitionEvent('error', (event) => {
-    setIsListening(false); stopMicPulse();
+    setIsListening(false); mic.stop();
     if (event.error !== 'no-speech') setMicError('Mic error. Try again / माइक त्रुटि।');
   });
 
   useEffect(() => {
     setTimeout(() => speakText(STEPS[0].speak), 600);
-    return () => { stopPulse(); stopMicPulse(); };
+    return () => { speaker.stop(); mic.stop(); };
   }, []);
 
   const cleanForStep = (text: string, stepIndex: number): string => {
@@ -184,44 +109,27 @@ export default function VoiceInputScreen(): React.ReactElement {
     }
   };
 
-  // ── Animations ────────────────────────────────────────────────────────────
-  const startPulse = () => {
-    pulseLoop.current = Animated.loop(Animated.sequence([
-      Animated.timing(pulseAnim, { toValue: 1.2, duration: 700, useNativeDriver: true }),
-      Animated.timing(pulseAnim, { toValue: 1, duration: 700, useNativeDriver: true }),
-    ]));
-    pulseLoop.current.start();
-  };
-  const stopPulse = () => { pulseLoop.current?.stop(); pulseAnim.setValue(1); };
-
-  const startMicPulse = () => {
-    micPulseLoop.current = Animated.loop(Animated.sequence([
-      Animated.timing(micPulseAnim, { toValue: 1.35, duration: 500, useNativeDriver: true }),
-      Animated.timing(micPulseAnim, { toValue: 1, duration: 500, useNativeDriver: true }),
-    ]));
-    micPulseLoop.current.start();
-  };
-  const stopMicPulse = () => { micPulseLoop.current?.stop(); micPulseAnim.setValue(1); };
 
   // ── TTS ───────────────────────────────────────────────────────────────────
   const speakText = (text: string): void => {
-    Speech.stop(); setIsSpeaking(true); startPulse();
+    Speech.stop(); setIsSpeaking(true); speaker.start();
     Speech.speak(text, {
-      language: 'en-IN', pitch: 1.0, rate: 0.85,
-      onDone: () => { setIsSpeaking(false); stopPulse(); },
-      onError: () => { setIsSpeaking(false); stopPulse(); },
-      onStopped: () => { setIsSpeaking(false); stopPulse(); },
+      language: 'hi-IN', pitch: 1.0, rate: 0.85,
+      onDone: () => { setIsSpeaking(false); speaker.stop(); },
+      onError: () => { setIsSpeaking(false); speaker.stop(); },
+      onStopped: () => { setIsSpeaking(false); speaker.stop(); },
     });
   };
 
   // ── STT ───────────────────────────────────────────────────────────────────
   const startListening = async (): Promise<void> => {
-    if (isListening) { await stopListening(); return; }
     setMicError(''); setInputValue('');
     try {
-      await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+      const { granted } = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+      if (!granted) return;
       ExpoSpeechRecognitionModule.start({ lang: 'hi-IN', interimResults: true });
-      startMicPulse();
+      mic.start();
+      mic.start();
     } catch (e) {
       setMicError('Could not start mic / माइक शुरू नहीं हो सका');
     }
@@ -229,7 +137,7 @@ export default function VoiceInputScreen(): React.ReactElement {
 
   const stopListening = async (): Promise<void> => {
     ExpoSpeechRecognitionModule.stop();
-    setIsListening(false); stopMicPulse();
+    setIsListening(false); mic.stop();
   };
 
   const micPanResponder = PanResponder.create({
@@ -295,7 +203,7 @@ export default function VoiceInputScreen(): React.ReactElement {
   const handleSave = async (): Promise<void> => {
     setIsLoading(true);
     try {
-      await saveTicket({ name: formData.name, fatherName: formData.fatherName, date: formData.date, quantity: parseFloat(formData.quantity), comment: formData.comment });
+      await saveTicket({ farmer_code: formData.farmer_code, name: formData.name, fatherName: formData.fatherName, date: formData.date, quantity: parseFloat(formData.quantity), comment: formData.comment });
       setShowSummaryModal(false); setSavedSuccess(true);
       speakText('Record saved successfully!');
       setTimeout(() => { setSavedSuccess(false); resetForm(); }, 2500);
@@ -305,7 +213,7 @@ export default function VoiceInputScreen(): React.ReactElement {
 
   const resetForm = (): void => {
     setCurrentStep(0);
-    setFormData({ name: '', fatherName: '', date: '', quantity: '', comment: '' });
+    setFormData({ farmer_code: '', name: '', fatherName: '', date: '', quantity: '', comment: '' });
     setInputValue(''); setConfirmedValues({}); setMicError('');
     setTimeout(() => speakText(STEPS[0].speak), 300);
   };
@@ -319,7 +227,8 @@ export default function VoiceInputScreen(): React.ReactElement {
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
-      <ScrollView style={styles.container} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+    <SafeAreaView style={styles.safe}>
+      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
 
         {savedSuccess && (
           <View style={styles.successBanner}>
@@ -590,13 +499,14 @@ export default function VoiceInputScreen(): React.ReactElement {
         </Modal>
 
       </ScrollView>
+    </SafeAreaView>
   );
 }
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0f0f1e', top:40 },
+  safe: { flex: 1, backgroundColor: '#0f0f1e' },
   content: { padding: 16, paddingBottom: 40 },
 
   successBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#2ecc71', borderRadius: 10, padding: 12, marginBottom: 14 },
