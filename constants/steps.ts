@@ -45,6 +45,16 @@ export const STEPS: Step[] = [
     keyboardType: 'default',
   },
   {
+    key: 'caneOwner',
+    label: 'caneOwner',
+    labelHindi: 'गन्ना मालिक का नाम',
+    promptHindi: 'क्या यह गन्ना आपका खुद का है या किसी और का?',
+    promptEn: 'Is this sugarcane your own or someone else',
+    speak: 'कृपया गन्ने के मालिक का नाम बोलें।',
+    placeholder: 'मालिक का नाम / Owner Name',
+    keyboardType: 'default',
+  },
+  {
     key: 'date',
     label: 'Date',
     labelHindi: 'तारीख',

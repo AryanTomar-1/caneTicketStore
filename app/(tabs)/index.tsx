@@ -18,12 +18,11 @@ import { useMicPulse, useSpeakerPulse } from '../../hooks/useMicPulse';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Speech from 'expo-speech';
-import {
-  ExpoSpeechRecognitionModule,
-  useSpeechRecognitionEvent,
-} from 'expo-speech-recognition';
-import { saveTicket } from '../../utils/storage';
+import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent} from 'expo-speech-recognition';
+import { saveTicket, getTicketByFarmer_code } from '../../utils/storage';
 import { FormData, ConfirmedValues } from '../../types';
+import SeasonSelector from '../../components/SeasonSelector';
+import { getCurrentSeasonId } from '../../utils/season';
 
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
@@ -53,16 +52,21 @@ const isValidDate = (value: string): boolean => {
 
 export default function VoiceInputScreen(): React.ReactElement {
   const [currentStep, setCurrentStep] = useState<number>(0);
-  const [formData, setFormData] = useState<FormData>({ farmer_code: '', name: '', fatherName: '', date: '', quantity: '', comment: '' });
+  const [formData, setFormData] = useState<FormData>({ farmer_code: '', name: '', fatherName: '', caneOwner: '', date: '', quantity: '', comment: '' });
   const [inputValue, setInputValue] = useState<string>('');
   const [isSpeaking, setIsSpeaking] = useState<boolean>(false);
   const [isListening, setIsListening] = useState<boolean>(false);
   const [showConfirmModal, setShowConfirmModal] = useState<boolean>(false);
+  const [showFarmerModal, setShowFarmerModal] = useState(false);
+  const [foundPerson, setFoundPerson] = useState<{ name: string; fatherName: string } | null>(null);
   const [showSummaryModal, setShowSummaryModal] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [savedSuccess, setSavedSuccess] = useState<boolean>(false);
   const [confirmedValues, setConfirmedValues] = useState<ConfirmedValues>({});
   const [micError, setMicError] = useState<string>('');
+  const [ownerType, setOwnerType] = useState<'self' | 'other' | null>(null);
+  const [showOwnerModal, setShowOwnerModal] = useState(false);
+  const [ownerNameInput, setOwnerNameInput] = useState('');
 
   const pulseAnim = useRef<Animated.Value>(new Animated.Value(1)).current;
   const micPulseAnim = useRef<Animated.Value>(new Animated.Value(1)).current;
@@ -86,6 +90,7 @@ export default function VoiceInputScreen(): React.ReactElement {
     setTimeout(() => speakText(STEPS[0].speak), 600);
     return () => { speaker.stop(); mic.stop(); };
   }, []);
+
 
   const cleanForStep = (text: string, stepIndex: number): string => {
     const key = STEPS[stepIndex].key;
@@ -147,6 +152,34 @@ export default function VoiceInputScreen(): React.ReactElement {
     onPanResponderTerminate: () => { stopListening(); },
   });
 
+  // Date form DB
+
+  const findFarmer = async (farmer_code: string) => {
+    if (!farmer_code.trim()) return;
+
+    const data = await getTicketByFarmer_code(farmer_code);
+    if (!data || data.length === 0) {
+      setCurrentStep(1);
+      return;
+    }
+
+    const uniqueNames = [...new Set(data.map(t => t.name))];
+
+    if (uniqueNames.length === 1) {
+      const person = data.find(t => t.name === uniqueNames[0]);
+      if (person) {
+        setFoundPerson({ name: person.name, fatherName: person.fatherName });
+        setFormData(prev => ({ ...prev, farmer_code }));
+        setShowFarmerModal(true);
+        speakText(`${person.name} मिले। क्या यह सही है?`);
+      }
+    } else {
+      setFormData(prev => ({ ...prev, farmer_code }));
+      setCurrentStep(1);
+      speakText('कृपया नाम दर्ज करें।');
+    }
+  };
+
   // ── Date input handler ────────────────────────────────────────────────────
   const handleDateChange = (text: string): void => {
     // Backspace: allow deletion cleanly
@@ -163,9 +196,24 @@ export default function VoiceInputScreen(): React.ReactElement {
   };
 
   // ── Form handlers ─────────────────────────────────────────────────────────
+  const handleBack = (): void => {
+    const pre = currentStep - 1;
+    setCurrentStep(pre);
+  }
+
   const handleNext = (): void => {
     const step = STEPS[currentStep];
     const value = inputValue.trim();
+    if (step.key === 'caneOwner') {
+      if (!ownerType) {
+        Alert.alert('आवश्यक', 'कृपया एक विकल्प चुनें।');
+        return;
+      }
+      if (ownerType === 'other' && !value) {
+        Alert.alert('आवश्यक', 'मालिक का नाम दर्ज करें।');
+        return;
+      }
+    }
     if (!value) { Alert.alert('Required / आवश्यक', `Please enter ${step.labelHindi} / ${step.label}`); return; }
     if (step.key === 'date') {
       if (value.length < 10) { Alert.alert('Incomplete Date', 'Please enter a complete date: DD/MM/YYYY'); return; }
@@ -186,6 +234,13 @@ export default function VoiceInputScreen(): React.ReactElement {
     setConfirmedValues(prev => ({ ...prev, [step.key]: value }));
     setInputValue('');
     setShowConfirmModal(false);
+
+    // ── Farmer code confirmed → search existing records ──
+    if (step.key === 'farmer_code') {
+      findFarmer(value);
+      return; // loadData handles next step via modal
+    }
+
     if (currentStep < STEPS.length - 1) {
       const next = currentStep + 1;
       setCurrentStep(next);
@@ -203,7 +258,7 @@ export default function VoiceInputScreen(): React.ReactElement {
   const handleSave = async (): Promise<void> => {
     setIsLoading(true);
     try {
-      await saveTicket({ farmer_code: formData.farmer_code, name: formData.name, fatherName: formData.fatherName, date: formData.date, quantity: parseFloat(formData.quantity), comment: formData.comment });
+      await saveTicket({ farmer_code: formData.farmer_code, name: formData.name, fatherName: formData.fatherName, caneOwner: formData.caneOwner, date: formData.date, quantity: parseFloat(formData.quantity), comment: formData.comment });
       setShowSummaryModal(false); setSavedSuccess(true);
       speakText('Record saved successfully!');
       setTimeout(() => { setSavedSuccess(false); resetForm(); }, 2500);
@@ -213,7 +268,7 @@ export default function VoiceInputScreen(): React.ReactElement {
 
   const resetForm = (): void => {
     setCurrentStep(0);
-    setFormData({ farmer_code: '', name: '', fatherName: '', date: '', quantity: '', comment: '' });
+    setFormData({ farmer_code: '', name: '', fatherName: '', caneOwner: '', date: '', quantity: '', comment: '' });
     setInputValue(''); setConfirmedValues({}); setMicError('');
     setTimeout(() => speakText(STEPS[0].speak), 300);
   };
@@ -222,6 +277,7 @@ export default function VoiceInputScreen(): React.ReactElement {
   const progress = (currentStep / STEPS.length) * 100;
   const isDateStep = step.key === 'date';
   const isCommentStep = step.key === 'comment';
+  const isOwnerStep = step.key === 'caneOwner';
   const dateComplete = inputValue.length === 10;
   const dateValid = dateComplete && isValidDate(inputValue);
 
@@ -236,6 +292,10 @@ export default function VoiceInputScreen(): React.ReactElement {
             <Text style={styles.successText}>✅ रिकॉर्ड सफलतापूर्वक सहेजा गया!</Text>
           </View>
         )}
+
+        <View style={styles.seasonRow}>
+          <SeasonSelector /> {/* no props needed */}
+        </View>
 
         {/* Progress */}
         <View style={styles.progressWrap}>
@@ -353,7 +413,8 @@ export default function VoiceInputScreen(): React.ReactElement {
               {/* Mic button below for comment (larger target) */}
               <View style={styles.commentMicRow}>
                 <Animated.View style={{ transform: [{ scale: micPulseAnim }] }}>
-                  <View {...micPanResponder.panHandlers} style={[styles.sttBtnLarge, isListening && styles.sttBtnActive]}>
+                  <View {...micPanResponder.panHandlers} 
+                    style={[styles.sttBtnLarge, isListening && styles.sttBtnActive]}>
                     <Ionicons name={isListening ? 'mic' : 'mic-outline'} size={28} color={isListening ? '#fff' : '#f0a500'} />
                     <Text style={[styles.holdText, isListening && { color: '#fff' }]}>
                       {isListening ? 'Recording...' : 'Hold to speak'}
@@ -364,6 +425,59 @@ export default function VoiceInputScreen(): React.ReactElement {
               <Text style={styles.optionalHint}>⬆ Optional / वैकल्पिक — you can skip this step</Text>
             </View>
 
+          ) : isOwnerStep ? (
+            /* ── OWNER STEP ── */
+            <View>
+              {/* Radio options */}
+              <TouchableOpacity
+                style={[styles.ownerOption, ownerType === 'self' && styles.ownerOptionSelected]}
+                onPress={() => { setOwnerType('self'); setInputValue("मेरा गन्ना"); }}
+              >
+                <View style={[styles.radioCircle, ownerType === 'self' && styles.radioSelected]}>
+                  {ownerType === 'self' && <View style={styles.radioDot} />}
+                </View>
+                <Text style={[styles.ownerOptionTitle, ownerType === 'self' && { color: '#2ecc71' }]}>
+                  मेरा खुद का गन्ना है
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.ownerOption, ownerType === 'other' && styles.ownerOptionOtherSelected]}
+                onPress={() => { setOwnerType('other'); setInputValue(''); }}
+              >
+                <View style={[styles.radioCircle, ownerType === 'other' && styles.radioOtherSelected]}>
+                  {ownerType === 'other' && <View style={styles.radioDotOther} />}
+                </View>
+                <Text style={[styles.ownerOptionTitle, ownerType === 'other' && { color: '#f0a500' }]}>
+                  दूसरे का गन्ना है
+                </Text>
+              </TouchableOpacity>
+
+              {/* Name input — same style as other inputs, shown when 'other' selected */}
+              {ownerType === 'other' && (
+                <View style={styles.inputRow}>
+                  <TextInput
+                    style={styles.input}
+                    value={inputValue}
+                    onChangeText={setInputValue}
+                    placeholder="मालिक का नाम / Owner Name"
+                    placeholderTextColor="#555"
+                    autoCorrect={false}
+                    autoFocus
+                    returnKeyType="done"
+                    onSubmitEditing={handleNext}
+                  />
+                  <Animated.View style={{ transform: [{ scale: micPulseAnim }] }}>
+                    <View
+                      {...micPanResponder.panHandlers}
+                      style={[styles.sttBtn, isListening && styles.sttBtnActive]}
+                    >
+                      <Ionicons name={isListening ? 'mic' : 'mic-outline'} size={22} color={isListening ? '#fff' : '#f0a500'} />
+                    </View>
+                  </Animated.View>
+                </View>
+              )}
+            </View>
           ) : (
             /* ── OTHER STEPS: normal input + mic ── */
             <View style={styles.inputRow}>
@@ -402,7 +516,7 @@ export default function VoiceInputScreen(): React.ReactElement {
             <View style={styles.listeningBar}>
               <View style={styles.listeningDot} />
               <Text style={styles.listeningText}>सुन रहा है... / Listening...</Text>
-              <TouchableOpacity onPress={stopListening}><Text style={styles.stopText}>Stop</Text></TouchableOpacity>
+              <TouchableOpacity ><Text style={styles.stopText}>Stop</Text></TouchableOpacity>
             </View>
           )}
 
@@ -420,6 +534,11 @@ export default function VoiceInputScreen(): React.ReactElement {
                   : 'Review / समीक्षा करें'}
             </Text>
           </TouchableOpacity>
+          {currentStep > 0 && (<TouchableOpacity style={styles.backBtn} onPress={handleBack} activeOpacity={0.8}>
+            <Text style={styles.backBtnText}>
+              ↲ Back / पीछे
+            </Text>
+          </TouchableOpacity>)}
 
           {isCommentStep && (
             <TouchableOpacity style={styles.skipBtn} onPress={() => handleConfirmWithValue('')}>
@@ -471,6 +590,88 @@ export default function VoiceInputScreen(): React.ReactElement {
           </View>
         </Modal>
 
+        {/* ── Farmer Found Modal ── */}
+        <Modal visible={showFarmerModal} transparent animationType="fade">
+          <View style={styles.overlay}>
+            <View style={styles.modalCard}>
+
+              {/* Header */}
+              <View style={styles.farmerModalHeader}>
+                <Ionicons name="person-circle-outline" size={48} color="#f0a500" />
+                <Text style={styles.farmerModalTitle}>किसान मिला / Farmer Found</Text>
+              </View>
+
+              {/* Name card */}
+              <View style={styles.farmerInfoCard}>
+                <View style={styles.farmerInfoRow}>
+                  <View style={styles.farmerInfoIcon}>
+                    <Ionicons name="person-outline" size={16} color="#f0a500" />
+                  </View>
+                  <View>
+                    <Text style={styles.farmerInfoLabel}>नाम / Name</Text>
+                    <Text style={styles.farmerInfoValue}>{foundPerson?.name}</Text>
+                  </View>
+                </View>
+
+                <View style={styles.farmerDivider} />
+
+                <View style={styles.farmerInfoRow}>
+                  <View style={styles.farmerInfoIcon}>
+                    <Ionicons name="people-outline" size={16} color="#f0a500" />
+                  </View>
+                  <View>
+                    <Text style={styles.farmerInfoLabel}>पिता का नाम / Father</Text>
+                    <Text style={styles.farmerInfoValue}>{foundPerson?.fatherName}</Text>
+                  </View>
+                </View>
+              </View>
+
+              <Text style={styles.farmerModalQuestion}>क्या यह सही है? / Is this correct?</Text>
+
+              {/* Buttons */}
+              <View style={styles.modalBtns}>
+                <TouchableOpacity
+                  style={[styles.modalBtn, { backgroundColor: '#e74c3c' }]}
+                  onPress={() => {
+                    setShowFarmerModal(false);
+                    setFoundPerson(null);
+                    setCurrentStep(1);
+                    speakText('कृपया नाम दर्ज करें।');
+                  }}
+                >
+                  <Ionicons name="close" size={18} color="#fff" />
+                  <Text style={styles.modalBtnText}>नहीं / No</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.modalBtn, { backgroundColor: '#2ecc71' }]}
+                  onPress={() => {
+                    if (!foundPerson) return;
+                    setFormData(prev => ({
+                      ...prev,
+                      name: foundPerson.name,
+                      fatherName: foundPerson.fatherName,
+                    }));
+                    setConfirmedValues(prev => ({
+                      ...prev,
+                      name: foundPerson.name,
+                      fatherName: foundPerson.fatherName,
+                    }));
+                    setShowFarmerModal(false);
+                    setFoundPerson(null);
+                    setCurrentStep(3);
+                    speakText(`${foundPerson.name} की पुष्टि हुई। कृपया गन्ने के मालिक का नाम बोलें।`);
+                  }}
+                >
+                  <Ionicons name="checkmark" size={18} color="#fff" />
+                  <Text style={styles.modalBtnText}>हाँ / Yes</Text>
+                </TouchableOpacity>
+              </View>
+
+            </View>
+          </View>
+        </Modal>
+
         {/* Summary Modal */}
         <Modal visible={showSummaryModal} transparent animationType="slide">
           <View style={styles.overlay}>
@@ -508,6 +709,13 @@ export default function VoiceInputScreen(): React.ReactElement {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#0f0f1e' },
   content: { padding: 16, paddingBottom: 40 },
+
+  seasonRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 12,
+  },
 
   successBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#2ecc71', borderRadius: 10, padding: 12, marginBottom: 14 },
   successText: { color: '#fff', fontWeight: '700', fontSize: 14 },
@@ -578,7 +786,9 @@ const styles = StyleSheet.create({
   replayBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 14 },
   replayText: { color: '#f0a500', fontSize: 12 },
 
-  nextBtn: { backgroundColor: '#f0a500', borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
+  backBtn: { backgroundColor: '#000000', borderRadius: 12, paddingVertical: 14, alignItems: 'center', marginBottom: 5 },
+  nextBtn: { backgroundColor: '#f0a500', borderRadius: 12, paddingVertical: 14, alignItems: 'center', marginBottom: 5 },
+  backBtnText: { color: '#f0a500', fontSize: 16, fontWeight: '800' },
   nextBtnText: { color: '#1a1a2e', fontSize: 16, fontWeight: '800' },
 
   skipBtn: { alignItems: 'center', paddingVertical: 8 },
@@ -603,6 +813,89 @@ const styles = StyleSheet.create({
   modalBtns: { flexDirection: 'row', gap: 10 },
   modalBtn: { flex: 1, borderRadius: 10, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
   modalBtnText: { color: '#fff', fontSize: 14, fontWeight: '700' },
+
+  ownerOption: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: '#0f0f1e', borderRadius: 10, padding: 14,
+    marginBottom: 10, borderWidth: 1.5, borderColor: '#2d2d4e',
+  },
+  ownerOptionSelected: {
+    borderColor: '#2ecc71', backgroundColor: 'rgba(46,204,113,0.08)',
+  },
+  ownerOptionOtherSelected: {
+    borderColor: '#f0a500', backgroundColor: 'rgba(240,165,0,0.08)',
+  },
+  ownerOptionTitle: {
+    color: '#f0f0f0', fontSize: 15, fontWeight: '700', flex: 1,
+  },
+  radioCircle: {
+    width: 22, height: 22, borderRadius: 11,
+    borderWidth: 2, borderColor: '#2d2d4e',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  radioSelected: { borderColor: '#2ecc71' },
+  radioOtherSelected: { borderColor: '#f0a500' },
+  radioDot: {
+    width: 10, height: 10, borderRadius: 5, backgroundColor: '#2ecc71',
+  },
+  radioDotOther: {
+    width: 10, height: 10, borderRadius: 5, backgroundColor: '#f0a500',
+  },
+
+  farmerModalHeader: {
+    alignItems: 'center',
+    marginBottom: 16,
+    gap: 8,
+  },
+  farmerModalTitle: {
+    color: '#f0a500',
+    fontSize: 18,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  farmerInfoCard: {
+    backgroundColor: '#0f0f1e',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1.5,
+    borderColor: 'rgba(240,165,0,0.3)',
+    marginBottom: 16,
+  },
+  farmerInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  farmerInfoIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(240,165,0,0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  farmerInfoLabel: {
+    color: '#888',
+    fontSize: 11,
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  farmerInfoValue: {
+    color: '#f0f0f0',
+    fontSize: 17,
+    fontWeight: '800',
+  },
+  farmerDivider: {
+    height: 1,
+    backgroundColor: '#2d2d4e',
+    marginVertical: 12,
+  },
+  farmerModalQuestion: {
+    color: '#ccc',
+    fontSize: 13,
+    textAlign: 'center',
+    marginBottom: 18,
+  },
 
   summaryRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#2d2d4e' },
   summaryKey: { color: '#888', fontSize: 13 },

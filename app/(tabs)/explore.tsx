@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity,
   FlatList, Modal, Alert, RefreshControl, Animated, PanResponder,
   Share, Linking, ListRenderItem,
 } from 'react-native';
+import { useFocusEffect } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from 'expo-speech-recognition';
@@ -12,6 +13,8 @@ import { getAllTickets, deleteTicket, updateTicket, formatDateTime, checkDuplica
 import { formatDateInput, isValidDate } from '../../utils/dateHelpers';
 import { useMicPulse } from '../../hooks/useMicPulse';
 import { Ticket } from '../../types';
+import SeasonSelector from '../../components/SeasonSelector';
+import { useSeason } from '../../context/SeasonContext';
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
@@ -19,18 +22,22 @@ export default function DashboardScreen(): React.ReactElement {
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [filtered, setFiltered] = useState<Ticket[]>([]);
   const [searchText, setSearchText] = useState('');
-  const [selectedName, setSelectedName] = useState<string | null>(null);
+  const [selectedNames, setSelectedNames] = useState<string[]>([]);
   const [uniqueNames, setUniqueNames] = useState<string[]>([]);
   const [showNamesModal, setShowNamesModal] = useState(false);
   const [filterDate, setFilterDate] = useState('');
   const [showDateInput, setShowDateInput] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [lastLoaded, setLastLoaded] = useState(0);
   const [isSearchListening, setIsSearchListening] = useState(false);
+  const { selectedSeason } = useSeason(); // import from context
+
+  const [selectedOwners, setSelectedOwners] = useState<string[]>([]);
+  const [showOwnerModal, setShowOwnerModal] = useState(false);
+  const [uniqueOwners, setUniqueOwners] = useState<string[]>([]);
 
   // ── Stats ─────────────────────────────────────────────────────────────────
   const totalQty = filtered.reduce((sum, t) => sum + (parseFloat(String(t.quantity)) || 0), 0);
-  const hasFilters = searchText || selectedName || filterDate;
+  const hasFilters = searchText || selectedNames.length > 0 || selectedOwners.length > 0 || filterDate;
   const [pricePerQty, setPricePerQty] = useState<string>('');
   const totalAmount = pricePerQty ? (totalQty * parseFloat(pricePerQty)).toFixed(2) : null;
 
@@ -72,23 +79,28 @@ export default function DashboardScreen(): React.ReactElement {
   });
 
   // ── Data ──────────────────────────────────────────────────────────────────
-  useEffect(() => { loadData(); }, []);
-  useEffect(() => {
-    const interval = setInterval(() => setLastLoaded(Date.now()), 2000);
-    return () => clearInterval(interval);
-  }, []);
-  useEffect(() => { loadData(); }, [lastLoaded]);
+  // Replace the deleted useEffects with this one:
+  useFocusEffect(
+    useCallback(() => {
+      loadData();
+    }, [selectedSeason]) // reload when season changes too
+  );
 
   const loadData = async () => {
-    const data = await getAllTickets();
+    let data = await getAllTickets();
+    setUniqueOwners([...new Set(data.map(t => t.caneOwner).filter(Boolean))].sort());
+    if (selectedOwners.length > 0) {
+      data = data.filter(t => selectedOwners.includes(t.caneOwner));
+    }
     setTickets(data);
     setUniqueNames([...new Set(data.map(t => t.name))].sort());
-    applyFilters(data, searchText, selectedName, filterDate);
+    applyFilters(data, searchText, selectedNames, filterDate);
   };
 
-  const applyFilters = (data: Ticket[], search: string, name: string | null, date: string) => {
+  const applyFilters = (data: Ticket[], search: string, names: string[], date: string) => {
     let result = [...data];
-    if (name) result = result.filter(t => t.name === name);
+    // Filter by multiple selected names (OR logic)
+    if (names.length > 0) result = result.filter(t => names.includes(t.name));
     if (search.trim()) {
       const q = search.toLowerCase().trim();
       result = result.filter(t =>
@@ -98,29 +110,59 @@ export default function DashboardScreen(): React.ReactElement {
       );
     }
     if (date.trim()) result = result.filter(t => t.date?.includes(date.trim()));
+    result.sort((a, b) => {
+      const parseDate = (d: string) => {
+        if (!d) return 0;
+        const [dd, mm, yyyy] = d.split('/');
+        return new Date(`${yyyy}-${mm}-${dd}`).getTime();
+      };
+      return parseDate(b.date) - parseDate(a.date);
+    });
     setFiltered(result);
   };
 
   const handleSearch = (text: string) => {
     setSearchText(text);
-    applyFilters(tickets, text, selectedName, filterDate);
+    applyFilters(tickets, text, selectedNames, filterDate);
+  };
+
+  const handleSelectOwner = (owner: string | null) => {
+    if (owner === null) {
+      setSelectedOwners([]);
+      setShowOwnerModal(false);
+      return;
+    }
+    const newOwners = selectedOwners.includes(owner)
+      ? selectedOwners.filter(o => o !== owner)
+      : [...selectedOwners, owner];
+    setSelectedOwners(newOwners);
   };
 
   const handleSelectName = (name: string | null) => {
-    const newName = selectedName === name ? null : name;
-    setSelectedName(newName);
-    setShowNamesModal(false);
-    applyFilters(tickets, searchText, newName, filterDate);
+    if (name === null) {
+      // Clear all
+      setSelectedNames([]);
+      setShowNamesModal(false);
+      applyFilters(tickets, searchText, [], filterDate);
+      return;
+    }
+    const newNames = selectedNames.includes(name)
+      ? selectedNames.filter(n => n !== name)  // deselect
+      : [...selectedNames, name];               // select
+    setSelectedNames(newNames);
+    applyFilters(tickets, searchText, newNames, filterDate);
+    // Don't close modal so user can select more
   };
 
   const handleDateFilter = (date: string) => {
     const fmt = formatDateInput(date);
     setFilterDate(fmt);
-    applyFilters(tickets, searchText, selectedName, fmt);
+    applyFilters(tickets, searchText, selectedNames, fmt);
   };
 
   const clearFilters = () => {
-    setSearchText(''); setSelectedName(null); setFilterDate('');
+    setSearchText(''); setSelectedNames([]); setFilterDate('');
+    setSelectedOwners([]);
     setShowDateInput(false); setFiltered(tickets);
   };
 
@@ -255,6 +297,11 @@ export default function DashboardScreen(): React.ReactElement {
       <View style={styles.container}>
         {/* Header section */}
         <View style={styles.header}>
+          {/* Season selector row */}
+          <View style={styles.seasonRow}>
+            <Text style={styles.seasonRowLabel}>चालू सीजन:</Text>
+            <SeasonSelector /> {/* no props needed */}
+          </View>
           {/* Stats */}
           <View style={styles.statsRow}>
             <View style={[styles.statCard, { borderColor: 'rgba(240,165,0,0.4)' }]}>
@@ -324,13 +371,34 @@ export default function DashboardScreen(): React.ReactElement {
 
           {/* Filters */}
           <View style={styles.filterRow}>
-            <TouchableOpacity style={[styles.filterChip, selectedName && styles.filterChipOn]}
-              onPress={() => setShowNamesModal(true)}>
-              <Ionicons name="person-outline" size={13} color={selectedName ? '#f0a500' : '#888'} />
-              <Text style={[styles.filterChipText, selectedName && { color: '#f0a500' }]} numberOfLines={1}>
-                {selectedName || 'नाम चुनें'}
+            <TouchableOpacity
+              style={[styles.filterChip, selectedOwners.length > 0 && styles.filterChipOn]}
+              onPress={() => setShowOwnerModal(true)}
+            >
+              <Ionicons name="leaf-outline" size={13} color={selectedOwners.length > 0 ? '#2ecc71' : '#888'} />
+              <Text style={[styles.filterChipText, selectedOwners.length > 0 && { color: '#2ecc71' }]} numberOfLines={1}>
+                {selectedOwners.length === 0
+                  ? 'मालिक / Owner'
+                  : selectedOwners.length === 1
+                    ? selectedOwners[0]
+                    : `${selectedOwners.length} मालिक`}
               </Text>
-              <Ionicons name="chevron-down" size={12} color={selectedName ? '#f0a500' : '#888'} />
+              <Ionicons name="chevron-down" size={12} color={selectedOwners.length > 0 ? '#2ecc71' : '#888'} />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.filterChip, selectedNames.length > 0 && styles.filterChipOn]}
+              onPress={() => setShowNamesModal(true)}
+            >
+              <Ionicons name="person-outline" size={13} color={selectedNames.length > 0 ? '#f0a500' : '#888'} />
+              <Text style={[styles.filterChipText, selectedNames.length > 0 && { color: '#f0a500' }]} numberOfLines={1}>
+                {selectedNames.length === 0
+                  ? 'नाम चुनें'
+                  : selectedNames.length === 1
+                    ? selectedNames[0]
+                    : `${selectedNames.length} नाम चुने`}
+              </Text>
+              <Ionicons name="chevron-down" size={12} color={selectedNames.length > 0 ? '#f0a500' : '#888'} />
             </TouchableOpacity>
 
             <TouchableOpacity style={[styles.filterChip, filterDate && styles.filterChipOn]}
@@ -362,10 +430,16 @@ export default function DashboardScreen(): React.ReactElement {
             </View>
           )}
 
-          {selectedName && (
+          {selectedNames && selectedNames.length > 0 && (
             <View style={styles.activeTag}>
               <Text style={styles.activeTagText}>
-                दिखा रहे: <Text style={{ color: '#f0a500', fontWeight: '700' }}>{selectedName}</Text>
+                दिखा रहे:{" "}
+                {selectedNames.map((name, index) => (
+                  <Text key={index} style={{ color: '#f0a500', fontWeight: '700' }}>
+                    {name}
+                    {index !== selectedNames.length - 1 ? ', ' : ''}
+                  </Text>
+                ))}
               </Text>
             </View>
           )}
@@ -407,10 +481,14 @@ export default function DashboardScreen(): React.ReactElement {
               </TouchableOpacity>
             </View>
             <ScrollView>
-              <TouchableOpacity style={[styles.nameItem, !selectedName && styles.nameItemOn]}
-                onPress={() => handleSelectName(null)}>
-                <Text style={[styles.nameItemText, !selectedName && { color: '#f0a500' }]}>All / सभी नाम</Text>
-                {!selectedName && <Ionicons name="checkmark" size={16} color="#f0a500" />}
+              <TouchableOpacity
+                style={[styles.nameItem, selectedNames.length === 0 && styles.nameItemOn]}
+                onPress={() => handleSelectName(null)}
+              >
+                <Text style={[styles.nameItemText, selectedNames.length === 0 && { color: '#f0a500' }]}>
+                  All / सभी नाम
+                </Text>
+                {selectedNames.length === 0 && <Ionicons name="checkmark" size={16} color="#f0a500" />}
               </TouchableOpacity>
               {uniqueNames.map(name => {
                 const count = tickets.filter(t => t.name === name).length;
@@ -418,22 +496,89 @@ export default function DashboardScreen(): React.ReactElement {
                   .reduce((s, t) => s + (parseFloat(String(t.quantity)) || 0), 0);
                 return (
                   <TouchableOpacity key={name}
-                    style={[styles.nameItem, selectedName === name && styles.nameItemOn]}
+                    style={[styles.nameItem, selectedNames.includes(name) && styles.nameItemOn]}
                     onPress={() => handleSelectName(name)}>
                     <View style={styles.nameAvatar}>
-                      <Text style={[styles.nameAvatarText, selectedName === name && { color: '#f0a500' }]}>
+                      <Text style={[styles.nameAvatarText, selectedNames.includes(name) && { color: '#f0a500' }]}>
                         {name.charAt(0).toUpperCase()}
                       </Text>
                     </View>
                     <View style={{ flex: 1 }}>
-                      <Text style={[styles.nameItemText, selectedName === name && { color: '#f0a500' }]}>{name}</Text>
+                      <Text style={[styles.nameItemText, selectedNames.includes(name) && { color: '#f0a500' }]}>{name}</Text>
                       <Text style={styles.nameItemSub}>{count} tickets · {qty.toFixed(2)} क्विंटल</Text>
                     </View>
-                    {selectedName === name && <Ionicons name="checkmark" size={16} color="#f0a500" />}
+                    <View style={[styles.checkbox, selectedNames.includes(name) && styles.checkboxOn]}>
+                      {selectedNames.includes(name) && <Ionicons name="checkmark" size={12} color="#fff" />}
+                    </View>
                   </TouchableOpacity>
                 );
               })}
             </ScrollView>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* ── Owner Modal ── */}
+      <Modal visible={showOwnerModal} transparent animationType="slide">
+        <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setShowOwnerModal(false)}>
+          <View style={styles.namesSheet}>
+            <View style={styles.namesHeader}>
+              <Text style={styles.namesTitle}>🌾 मालिक चुनें / Select Owner</Text>
+              <TouchableOpacity onPress={() => setShowOwnerModal(false)}>
+                <Ionicons name="close" size={22} color="#888" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView>
+              {/* All option */}
+              <TouchableOpacity
+                style={[styles.nameItem, selectedOwners.length === 0 && styles.nameItemOn]}
+                onPress={() => handleSelectOwner(null)}
+              >
+                <Text style={[styles.nameItemText, selectedOwners.length === 0 && { color: '#2ecc71' }]}>
+                  All / सभी मालिक
+                </Text>
+                {selectedOwners.length === 0 && <Ionicons name="checkmark" size={16} color="#2ecc71" />}
+              </TouchableOpacity>
+
+              {uniqueOwners.map(owner => {
+                const count = tickets.filter(t => t.caneOwner === owner).length;
+                const qty = tickets
+                  .filter(t => t.caneOwner === owner)
+                  .reduce((s, t) => s + (parseFloat(String(t.quantity)) || 0), 0);
+                const isSelected = selectedOwners.includes(owner);
+                return (
+                  <TouchableOpacity
+                    key={owner}
+                    style={[styles.nameItem, isSelected && styles.nameItemOn]}
+                    onPress={() => handleSelectOwner(owner)}
+                  >
+                    <View style={[styles.nameAvatar, { backgroundColor: 'rgba(46,204,113,0.1)' }]}>
+                      <Text style={[styles.nameAvatarText, isSelected && { color: '#2ecc71' }]}>
+                        {owner.charAt(0).toUpperCase()}
+                      </Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.nameItemText, isSelected && { color: '#2ecc71' }]}>{owner}</Text>
+                      <Text style={styles.nameItemSub}>{count} tickets · {qty.toFixed(2)} क्विंटल</Text>
+                    </View>
+                    <View style={[styles.checkbox, isSelected && { backgroundColor: '#2ecc71', borderColor: '#2ecc71' }]}>
+                      {isSelected && <Ionicons name="checkmark" size={12} color="#fff" />}
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+
+            {/* Done button */}
+            <TouchableOpacity
+              style={[styles.doneBtn, { backgroundColor: '#2ecc71' }]}
+              onPress={() => setShowOwnerModal(false)}
+            >
+              <Text style={styles.doneBtnText}>
+                {selectedOwners.length > 0 ? `✓ ${selectedOwners.length} मालिक चुने` : 'बंद करें'}
+              </Text>
+            </TouchableOpacity>
           </View>
         </TouchableOpacity>
       </Modal>
@@ -497,6 +642,18 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   header: { padding: 14, paddingBottom: 0 },
   listContent: { padding: 14, paddingBottom: 30 },
+
+  seasonRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 12,
+  },
+  seasonRowLabel: {
+    color: '#666',
+    fontSize: 12,
+    fontWeight: '600',
+  },
 
   statsRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
   statCard: { flex: 1, backgroundColor: '#1a1a2e', borderRadius: 12, padding: 12, alignItems: 'center', borderWidth: 1 },
@@ -595,4 +752,27 @@ const styles = StyleSheet.create({
   editBtns: { flexDirection: 'row', gap: 10, marginTop: 16 },
   editBtn: { flex: 1, borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
   editBtnText: { color: '#fff', fontSize: 15, fontWeight: '800' },
+
+  checkbox: {
+    width: 22, height: 22, borderRadius: 6,
+    borderWidth: 1.5, borderColor: '#2d2d4e',
+    backgroundColor: '#0f0f1e',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  checkboxOn: {
+    backgroundColor: '#f0a500',
+    borderColor: '#f0a500',
+  },
+  doneBtn: {
+    backgroundColor: '#f0a500',
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+    marginTop: 12,
+  },
+  doneBtnText: {
+    color: '#1a1a2e',
+    fontSize: 14,
+    fontWeight: '800',
+  },
 });
