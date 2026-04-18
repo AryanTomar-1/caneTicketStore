@@ -23,6 +23,7 @@ import { saveTicket, getTicketByFarmer_code } from '../../utils/storage';
 import { FormData, ConfirmedValues } from '../../types';
 import SeasonSelector from '../../components/SeasonSelector';
 import { getCurrentSeasonId } from '../../utils/season';
+import { useSeason } from '../../context/SeasonContext';
 
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
@@ -67,6 +68,7 @@ export default function VoiceInputScreen(): React.ReactElement {
   const [ownerType, setOwnerType] = useState<'self' | 'other' | null>(null);
   const [showOwnerModal, setShowOwnerModal] = useState(false);
   const [ownerNameInput, setOwnerNameInput] = useState('');
+  const { selectedSeason } = useSeason();
 
   const pulseAnim = useRef<Animated.Value>(new Animated.Value(1)).current;
   const micPulseAnim = useRef<Animated.Value>(new Animated.Value(1)).current;
@@ -218,6 +220,26 @@ export default function VoiceInputScreen(): React.ReactElement {
     if (step.key === 'date') {
       if (value.length < 10) { Alert.alert('Incomplete Date', 'Please enter a complete date: DD/MM/YYYY'); return; }
       if (!isValidDate(value)) { Alert.alert('Invalid Date / गलत तारीख', `"${value}" is not valid.\nकृपया सही तारीख दर्ज करें।`); return; }
+      console.log("selected session ", selectedSeason);
+      console.log("value ",value);
+      const selectedYear : string[]=selectedSeason.split("-");
+      const fullDate : string[]=value.split("/");
+      if(selectedYear[0]!==fullDate[2] && selectedYear[1]!==fullDate[2]){
+        speakText('यह टिकट इस सीजन में दर्ज नहीं हो सकता, क्योंकि वर्ष मेल नहीं खाता। कृपया पहले सही सत्र (सेशन) चुनें, फिर यह टिकट दर्ज करें।');
+        Alert.alert('Invalid Year / गलत वर्ष', `"${value}" is not valid.\nयह टिकट इस सीजन में दर्ज नहीं हो सकता, क्योंकि वर्ष मेल नहीं खाता।\n
+          कृपया पहले सही सत्र (सेशन) चुनें, फिर यह टिकट दर्ज करें।`);
+        return;
+      }else if(selectedYear[0]===fullDate[2] && parseInt(fullDate[1],10)<10){
+        speakText('यह महीना पिछले सीजन में आता है, इस सीजन में नहीं। कृपया पहले सही सत्र (सेशन) चुनें, फिर यह टिकट दर्ज करें।');
+        Alert.alert('Invalid Year / गलत महीना', `"${value}" is not valid.\nयह महीना पिछले सीजन में आता है, इस सीजन में नहीं।
+          \nकृपया पहले सही सत्र (सेशन) चुनें, फिर यह टिकट दर्ज करें।`);
+        return;
+      }else if(selectedYear[1]===fullDate[2] && parseInt(fullDate[1],10)>=10){
+        speakText('यह महीना अगले सीजन में आता है, इस सीजन में नहीं। कृपया पहले सही सत्र (सेशन) चुनें, फिर यह टिकट दर्ज करें।');
+        Alert.alert('Invalid Year / गलत महीना', `"${value}" is not valid.\nयह महीना अगले सीजन में आता है, इस सीजन में नहीं।
+          \nकृपया पहले सही सत्र (सेशन) चुनें, फिर यह टिकट दर्ज करें।`);
+        return;
+      }
     }
     if (step.key === 'quantity' && isNaN(parseFloat(value))) {
       Alert.alert('Invalid', 'Please enter a valid number.\nकृपया एक सही संख्या दर्ज करें।'); return;
@@ -240,7 +262,7 @@ export default function VoiceInputScreen(): React.ReactElement {
       findFarmer(value);
       return; // loadData handles next step via modal
     }
-
+    setOwnerType(null);
     if (currentStep < STEPS.length - 1) {
       const next = currentStep + 1;
       setCurrentStep(next);
@@ -251,7 +273,7 @@ export default function VoiceInputScreen(): React.ReactElement {
   };
 
   const handleConfirmNo = (): void => {
-    setShowConfirmModal(false); setInputValue('');
+    setShowConfirmModal(false); setInputValue(''); setOwnerType(null);
     speakText('Let us try again. ' + STEPS[currentStep].speak);
   };
 
