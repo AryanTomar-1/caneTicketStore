@@ -1,18 +1,18 @@
 {
   "expo": {
-    "name": "caneTicketStore",
-    "slug": "caneTicketStore",
+    "name": "Smart Kissan",
+    "slug": "SmartKissan",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "caneticketstore",
+    "scheme": "SmartKissan",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSSpeechRecognitionUsageDescription": "Allow $(PRODUCT_NAME) to use speech recognition.",
-        "NSMicrophoneUsageDescription": "Allow $(PRODUCT_NAME) to use the microphone."
+        "NSSpeechRecognitionUsageDescription": "Allow speech recognition for voice input",
+        "NSMicrophoneUsageDescription": "Allow microphone access for voice input"
       }
     },
     "android": {
@@ -27,7 +27,7 @@
       "permissions": [
         "android.permission.RECORD_AUDIO"
       ],
-      "package": "com.aryan_tomar.caneTicketStore"
+      "package": "com.aryan_tomar.SmartKissan"
     },
     "web": {
       "output": "static",
@@ -62,8 +62,9 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "a20d3b3f-c527-4934-908c-9b63ee9903e8"
+        "projectId": "07709188-9f1d-426b-a7ea-d05c7a685ae5"
       }
-    }
+    },
+    "owner": "dev-aryantomar"
   }
 }

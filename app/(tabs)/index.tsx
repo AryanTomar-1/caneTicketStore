@@ -15,7 +15,7 @@ import {
 } from 'react-native';
 import { STEPS } from '../../constants/steps';
 import { useMicPulse, useSpeakerPulse } from '../../hooks/useMicPulse';
-import { SafeAreaView } from 'react-native-safe-area-context';
+//import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Speech from 'expo-speech';
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent} from 'expo-speech-recognition';
@@ -305,7 +305,7 @@ export default function VoiceInputScreen(): React.ReactElement {
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <SafeAreaView style={styles.safe}>
+    <View style={styles.safe}>
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
 
         {savedSuccess && (
@@ -722,15 +722,15 @@ export default function VoiceInputScreen(): React.ReactElement {
         </Modal>
 
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#0f0f1e' },
-  content: { padding: 16, paddingBottom: 40 },
+  safe: { flex: 1, backgroundColor: '#0f0f1e', paddingTop:20 },
+  content: { padding: 16, paddingBottom: 5 },
 
   seasonRow: {
     flexDirection: 'row',

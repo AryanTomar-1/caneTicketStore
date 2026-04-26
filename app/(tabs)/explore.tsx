@@ -5,7 +5,7 @@ import {
   Share, Linking, ListRenderItem,
 } from 'react-native';
 import { useFocusEffect } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
+//import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from 'expo-speech-recognition';
 
@@ -293,7 +293,7 @@ export default function DashboardScreen(): React.ReactElement {
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <SafeAreaView style={styles.safe}>
+    <View style={styles.safe}>
       <View style={styles.container}>
         {/* Header section */}
         <View style={styles.header}>
@@ -631,17 +631,17 @@ export default function DashboardScreen(): React.ReactElement {
         </View>
       </Modal>
 
-    </SafeAreaView>
+    </View>
   );
 }
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#0f0f1e' },
+  safe: { flex: 1, backgroundColor: '#0f0f1e', paddingTop:20 },
   container: { flex: 1 },
   header: { padding: 14, paddingBottom: 0 },
-  listContent: { padding: 14, paddingBottom: 30 },
+  listContent: { padding: 14, paddingBottom: 5 },
 
   seasonRow: {
     flexDirection: 'row',
