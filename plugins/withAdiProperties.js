@@ -3,6 +3,7 @@ const { withDangerousMod } = require('@expo/config-plugins');
 const fs = require('fs');
 const path = require('path');
 
+/** @type {import('@expo/config-plugins').ConfigPlugin} */
 const withAdiProperties = (config) => {
   return withDangerousMod(config, [
     'android',
@@ -18,9 +19,9 @@ const withAdiProperties = (config) => {
       const dest = path.join(assetsDir, 'adi-registration.properties');
       if (fs.existsSync(src)) {
         fs.copyFileSync(src, dest);
-        console.log('✅ adi-registration.properties copied');
+        console.log('adi-registration.properties copied');
       } else {
-        console.warn('⚠️ adi-registration.properties not found');
+        console.warn('adi-registration.properties not found');
       }
       return config;
     },
