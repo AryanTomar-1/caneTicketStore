@@ -27,3 +27,11 @@ export const todayFormatted = (): string => {
   const yyyy = d.getFullYear();
   return `${dd}/${mm}/${yyyy}`;
 };
+
+/**
+ * Sanitize free-form date search strings (e.g. "2024", "03/2024", "15/03")
+ * WITHOUT forcing the DD/MM/YYYY format. Used by the Dashboard date filter only.
+ * Keeps only digits and slashes, strips leading/trailing spaces.
+ */
+export const sanitizeFilterDate = (raw: string): string =>
+  raw.replace(/[^\d/]/g, '').slice(0, 10);

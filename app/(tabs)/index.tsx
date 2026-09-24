@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -10,25 +10,24 @@ import {
   Animated,
   Alert,
   ActivityIndicator,
-  KeyboardTypeOptions,
+  KeyboardAvoidingView,
+  Platform,
   PanResponder,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useIsFocused } from '@react-navigation/native';
 import { STEPS } from '../../constants/steps';
 import { useMicPulse, useSpeakerPulse } from '../../hooks/useMicPulse';
-//import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Speech from 'expo-speech';
-import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent} from 'expo-speech-recognition';
-import { saveTicket, getTicketByFarmer_code } from '../../utils/storage';
+import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from 'expo-speech-recognition';
+import { saveTicket, getTicketByFarmer_code, checkDuplicate } from '../../utils/storage';
 import { FormData, ConfirmedValues } from '../../types';
 import SeasonSelector from '../../components/SeasonSelector';
-import { getCurrentSeasonId } from '../../utils/season';
 import { useSeason } from '../../context/SeasonContext';
-
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
 
-/** Convert raw digits (or partial DD/MM/YYYY string) into formatted DD/MM/YYYY */
 const formatDateInput = (raw: string): string => {
   const digits = raw.replace(/\D/g, '').slice(0, 8);
   if (digits.length <= 2) return digits;
@@ -36,7 +35,6 @@ const formatDateInput = (raw: string): string => {
   return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
 };
 
-/** Full DD/MM/YYYY validation */
 const isValidDate = (value: string): boolean => {
   if (value.length !== 10) return false;
   const parts = value.split('/');
@@ -52,6 +50,9 @@ const isValidDate = (value: string): boolean => {
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function VoiceInputScreen(): React.ReactElement {
+  const insets = useSafeAreaInsets();
+  const isFocused = useIsFocused();
+
   const [currentStep, setCurrentStep] = useState<number>(0);
   const [formData, setFormData] = useState<FormData>({ farmer_code: '', name: '', fatherName: '', caneOwner: '', date: '', quantity: '', comment: '' });
   const [inputValue, setInputValue] = useState<string>('');
@@ -66,32 +67,45 @@ export default function VoiceInputScreen(): React.ReactElement {
   const [confirmedValues, setConfirmedValues] = useState<ConfirmedValues>({});
   const [micError, setMicError] = useState<string>('');
   const [ownerType, setOwnerType] = useState<'self' | 'other' | null>(null);
-  const [showOwnerModal, setShowOwnerModal] = useState(false);
-  const [ownerNameInput, setOwnerNameInput] = useState('');
   const { selectedSeason } = useSeason();
-
-  const pulseAnim = useRef<Animated.Value>(new Animated.Value(1)).current;
-  const micPulseAnim = useRef<Animated.Value>(new Animated.Value(1)).current;
 
   const mic = useMicPulse();
   const speaker = useSpeakerPulse();
 
-  // ── STT listeners ─────────────────────────────────────────────────────────
-  useSpeechRecognitionEvent('start', () => { setIsListening(true); setMicError(''); });
-  useSpeechRecognitionEvent('end', () => { setIsListening(false); mic.stop(); });
+  // ── STT listeners (gated by focus so Dashboard STT doesn't bleed in) ─────
+  useSpeechRecognitionEvent('start', () => {
+    if (!isFocused) return;
+    setIsListening(true);
+    setMicError('');
+  });
+  useSpeechRecognitionEvent('end', () => {
+    if (!isFocused) return;
+    setIsListening(false);
+    mic.stop();
+  });
   useSpeechRecognitionEvent('result', (event) => {
+    if (!isFocused) return;
     const result = event.results[0]?.transcript ?? '';
     if (result) setInputValue(cleanForStep(result, currentStep));
   });
   useSpeechRecognitionEvent('error', (event) => {
-    setIsListening(false); mic.stop();
-    if (event.error !== 'no-speech') setMicError('Mic error. Try again / माइक त्रुटि।');
+    if (!isFocused) return;
+    setIsListening(false);
+    mic.stop();
+    if (event.error !== 'no-speech') setMicError('माइक त्रुटि। पुनः प्रयास करें।');
   });
 
   useEffect(() => {
-    setTimeout(() => speakText(STEPS[0].speak), 600);
-    return () => { speaker.stop(); mic.stop(); };
-  }, []);
+    if (isFocused) {
+      setTimeout(() => speakText(STEPS[0].speak), 600);
+    }
+    return () => {
+      speaker.stop();
+      mic.stop();
+      Speech.stop();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isFocused]);
 
 
   const cleanForStep = (text: string, stepIndex: number): string => {
@@ -116,10 +130,11 @@ export default function VoiceInputScreen(): React.ReactElement {
     }
   };
 
-
   // ── TTS ───────────────────────────────────────────────────────────────────
   const speakText = (text: string): void => {
-    Speech.stop(); setIsSpeaking(true); speaker.start();
+    Speech.stop();
+    setIsSpeaking(true);
+    speaker.start();
     Speech.speak(text, {
       language: 'hi-IN', pitch: 1.0, rate: 0.85,
       onDone: () => { setIsSpeaking(false); speaker.stop(); },
@@ -130,21 +145,27 @@ export default function VoiceInputScreen(): React.ReactElement {
 
   // ── STT ───────────────────────────────────────────────────────────────────
   const startListening = async (): Promise<void> => {
-    setMicError(''); setInputValue('');
+    // Stop TTS first so mic doesn't record the app's own voice
+    Speech.stop();
+    setIsSpeaking(false);
+    speaker.stop();
+
+    setMicError('');
+    setInputValue('');
     try {
       const { granted } = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
       if (!granted) return;
       ExpoSpeechRecognitionModule.start({ lang: 'hi-IN', interimResults: true });
       mic.start();
-      mic.start();
-    } catch (e) {
-      setMicError('Could not start mic / माइक शुरू नहीं हो सका');
+    } catch {
+      setMicError('माइक शुरू नहीं हो सका।');
     }
   };
 
   const stopListening = async (): Promise<void> => {
     ExpoSpeechRecognitionModule.stop();
-    setIsListening(false); mic.stop();
+    setIsListening(false);
+    mic.stop();
   };
 
   const micPanResponder = PanResponder.create({
@@ -154,14 +175,14 @@ export default function VoiceInputScreen(): React.ReactElement {
     onPanResponderTerminate: () => { stopListening(); },
   });
 
-  // Date form DB
-
+  // ── Farmer lookup from previous seasons ──────────────────────────────────
   const findFarmer = async (farmer_code: string) => {
     if (!farmer_code.trim()) return;
 
     const data = await getTicketByFarmer_code(farmer_code);
     if (!data || data.length === 0) {
       setCurrentStep(1);
+      setTimeout(() => speakText(STEPS[1].speak), 400);
       return;
     }
 
@@ -178,13 +199,12 @@ export default function VoiceInputScreen(): React.ReactElement {
     } else {
       setFormData(prev => ({ ...prev, farmer_code }));
       setCurrentStep(1);
-      speakText('कृपया नाम दर्ज करें।');
+      speakText(STEPS[1].speak);
     }
   };
 
   // ── Date input handler ────────────────────────────────────────────────────
   const handleDateChange = (text: string): void => {
-    // Backspace: allow deletion cleanly
     if (text.length < inputValue.length) {
       const stripped = text.endsWith('/') ? text.slice(0, -1) : text;
       setInputValue(stripped);
@@ -194,14 +214,18 @@ export default function VoiceInputScreen(): React.ReactElement {
   };
 
   const handleInputChange = (text: string): void => {
-    STEPS[currentStep].key === 'date' ? handleDateChange(text) : setInputValue(text);
+    if (STEPS[currentStep].key === 'date') {
+      handleDateChange(text);
+    } else {
+      setInputValue(text);
+    }
   };
 
-  // ── Form handlers ─────────────────────────────────────────────────────────
+  // ── Back / Next ───────────────────────────────────────────────────────────
   const handleBack = (): void => {
     const pre = currentStep - 1;
     setCurrentStep(pre);
-  }
+  };
 
   const handleNext = (): void => {
     const step = STEPS[currentStep];
@@ -216,37 +240,33 @@ export default function VoiceInputScreen(): React.ReactElement {
         return;
       }
     }
-    if (!value) { Alert.alert('Required / आवश्यक', `Please enter ${step.labelHindi} / ${step.label}`); return; }
+    if (!value) { Alert.alert('आवश्यक', `कृपया ${step.labelHindi} दर्ज करें।`); return; }
     if (step.key === 'date') {
-      if (value.length < 10) { Alert.alert('Incomplete Date', 'Please enter a complete date: DD/MM/YYYY'); return; }
-      if (!isValidDate(value)) { Alert.alert('Invalid Date / गलत तारीख', `"${value}" is not valid.\nकृपया सही तारीख दर्ज करें।`); return; }
-      console.log("selected session ", selectedSeason);
-      console.log("value ",value);
-      const selectedYear : string[]=selectedSeason.split("-");
-      const fullDate : string[]=value.split("/");
-      if(selectedYear[0]!==fullDate[2] && selectedYear[1]!==fullDate[2]){
-        speakText('यह टिकट इस सीजन में दर्ज नहीं हो सकता, क्योंकि वर्ष मेल नहीं खाता। कृपया पहले सही सत्र (सेशन) चुनें, फिर यह टिकट दर्ज करें।');
-        Alert.alert('Invalid Year / गलत वर्ष', `"${value}" is not valid.\nयह टिकट इस सीजन में दर्ज नहीं हो सकता, क्योंकि वर्ष मेल नहीं खाता।\n
-          कृपया पहले सही सत्र (सेशन) चुनें, फिर यह टिकट दर्ज करें।`);
+      if (value.length < 10) { Alert.alert('अधूरी तारीख', 'कृपया पूरी तारीख दर्ज करें: DD/MM/YYYY'); return; }
+      if (!isValidDate(value)) { Alert.alert('गलत तारीख', `"${value}" सही तारीख नहीं है।\nकृपया सही तारीख दर्ज करें।`); return; }
+
+      const selectedYear: string[] = selectedSeason.split('-');
+      const fullDate: string[] = value.split('/');
+      if (selectedYear[0] !== fullDate[2] && selectedYear[1] !== fullDate[2]) {
+        speakText('यह टिकट इस सीजन में दर्ज नहीं हो सकता, क्योंकि वर्ष मेल नहीं खाता।');
+        Alert.alert('गलत वर्ष', `"${value}" इस सीजन के लिए सही नहीं है।\nकृपया पहले सही सत्र चुनें।`);
         return;
-      }else if(selectedYear[0]===fullDate[2] && parseInt(fullDate[1],10)<10){
-        speakText('यह महीना पिछले सीजन में आता है, इस सीजन में नहीं। कृपया पहले सही सत्र (सेशन) चुनें, फिर यह टिकट दर्ज करें।');
-        Alert.alert('Invalid Year / गलत महीना', `"${value}" is not valid.\nयह महीना पिछले सीजन में आता है, इस सीजन में नहीं।
-          \nकृपया पहले सही सत्र (सेशन) चुनें, फिर यह टिकट दर्ज करें।`);
+      } else if (selectedYear[0] === fullDate[2] && parseInt(fullDate[1], 10) < 10) {
+        speakText('यह महीना पिछले सीजन में आता है, इस सीजन में नहीं।');
+        Alert.alert('गलत महीना', `"${value}" इस सीजन के लिए सही नहीं है।\nयह महीना पिछले सीजन में आता है।`);
         return;
-      }else if(selectedYear[1]===fullDate[2] && parseInt(fullDate[1],10)>=10){
-        speakText('यह महीना अगले सीजन में आता है, इस सीजन में नहीं। कृपया पहले सही सत्र (सेशन) चुनें, फिर यह टिकट दर्ज करें।');
-        Alert.alert('Invalid Year / गलत महीना', `"${value}" is not valid.\nयह महीना अगले सीजन में आता है, इस सीजन में नहीं।
-          \nकृपया पहले सही सत्र (सेशन) चुनें, फिर यह टिकट दर्ज करें।`);
+      } else if (selectedYear[1] === fullDate[2] && parseInt(fullDate[1], 10) >= 10) {
+        speakText('यह महीना अगले सीजन में आता है, इस सीजन में नहीं।');
+        Alert.alert('गलत महीना', `"${value}" इस सीजन के लिए सही नहीं है।\nयह महीना अगले सीजन में आता है।`);
         return;
       }
     }
     if (step.key === 'quantity' && isNaN(parseFloat(value))) {
-      Alert.alert('Invalid', 'Please enter a valid number.\nकृपया एक सही संख्या दर्ज करें।'); return;
+      Alert.alert('गलत मात्रा', 'कृपया एक सही संख्या दर्ज करें।'); return;
     }
     if (isListening) stopListening();
     setShowConfirmModal(true);
-    speakText(`You entered ${value}. Is this correct?`);
+    speakText(`आपने दर्ज किया: ${value}। क्या यह सही है?`);
   };
 
   const handleConfirmYes = (): void => {
@@ -257,10 +277,9 @@ export default function VoiceInputScreen(): React.ReactElement {
     setInputValue('');
     setShowConfirmModal(false);
 
-    // ── Farmer code confirmed → search existing records ──
     if (step.key === 'farmer_code') {
       findFarmer(value);
-      return; // loadData handles next step via modal
+      return;
     }
     setOwnerType(null);
     if (currentStep < STEPS.length - 1) {
@@ -273,25 +292,65 @@ export default function VoiceInputScreen(): React.ReactElement {
   };
 
   const handleConfirmNo = (): void => {
-    setShowConfirmModal(false); setInputValue(''); setOwnerType(null);
-    speakText('Let us try again. ' + STEPS[currentStep].speak);
+    setShowConfirmModal(false);
+    setInputValue('');
+    setOwnerType(null);
+    speakText('पुनः प्रयास करें। ' + STEPS[currentStep].speak);
   };
 
   const handleSave = async (): Promise<void> => {
     setIsLoading(true);
     try {
-      await saveTicket({ farmer_code: formData.farmer_code, name: formData.name, fatherName: formData.fatherName, caneOwner: formData.caneOwner, date: formData.date, quantity: parseFloat(formData.quantity), comment: formData.comment });
-      setShowSummaryModal(false); setSavedSuccess(true);
-      speakText('Record saved successfully!');
-      setTimeout(() => { setSavedSuccess(false); resetForm(); }, 2500);
-    } catch { Alert.alert('Error', 'Failed to save. Please try again.'); }
-    finally { setIsLoading(false); }
+      // Duplicate check before saving
+      const dup = await checkDuplicate(formData.name, formData.date);
+      if (dup) {
+        Alert.alert(
+          'डुप्लीकेट रिकॉर्ड',
+          `"${formData.name}" का ${formData.date} को रिकॉर्ड पहले से मौजूद है।\nक्या आप फिर भी सहेजना चाहते हैं?`,
+          [
+            { text: 'रद्द करें', style: 'cancel', onPress: () => setIsLoading(false) },
+            {
+              text: 'फिर भी सहेजें',
+              style: 'destructive',
+              onPress: async () => {
+                await performSave();
+              },
+            },
+          ]
+        );
+        return;
+      }
+      await performSave();
+    } catch {
+      Alert.alert('त्रुटि', 'सहेजने में समस्या। कृपया पुनः प्रयास करें।');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const performSave = async () => {
+    await saveTicket({
+      farmer_code: formData.farmer_code,
+      name: formData.name,
+      fatherName: formData.fatherName,
+      caneOwner: formData.caneOwner,
+      date: formData.date,
+      quantity: parseFloat(formData.quantity),
+      comment: formData.comment,
+    });
+    setShowSummaryModal(false);
+    setSavedSuccess(true);
+    speakText('रिकॉर्ड सफलतापूर्वक सहेजा गया!');
+    setTimeout(() => { setSavedSuccess(false); resetForm(); }, 2500);
+    setIsLoading(false);
   };
 
   const resetForm = (): void => {
     setCurrentStep(0);
     setFormData({ farmer_code: '', name: '', fatherName: '', caneOwner: '', date: '', quantity: '', comment: '' });
-    setInputValue(''); setConfirmedValues({}); setMicError('');
+    setInputValue('');
+    setConfirmedValues({});
+    setMicError('');
     setTimeout(() => speakText(STEPS[0].speak), 300);
   };
 
@@ -305,191 +364,108 @@ export default function VoiceInputScreen(): React.ReactElement {
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <View style={styles.safe}>
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+    <KeyboardAvoidingView
+      style={{ flex: 1 }}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+    >
+      <View style={[styles.safe, { paddingTop: insets.top || 20 }]}>
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
 
-        {savedSuccess && (
-          <View style={styles.successBanner}>
-            <Ionicons name="checkmark-circle" size={20} color="#fff" />
-            <Text style={styles.successText}>✅ रिकॉर्ड सफलतापूर्वक सहेजा गया!</Text>
-          </View>
-        )}
-
-        <View style={styles.seasonRow}>
-          <SeasonSelector /> {/* no props needed */}
-        </View>
-
-        {/* Progress */}
-        <View style={styles.progressWrap}>
-          <View style={styles.progressTrack}>
-            <View style={[styles.progressFill, { width: `${progress}%` }]} />
-          </View>
-          <Text style={styles.progressText}>Step {currentStep + 1} of {STEPS.length}</Text>
-        </View>
-
-        {/* Step Dots */}
-        <View style={styles.stepsRow}>
-          {STEPS.map((s, i) => (
-            <View key={s.key} style={styles.stepItem}>
-              <View style={[styles.dot, i < currentStep && styles.dotDone, i === currentStep && styles.dotActive]}>
-                {i < currentStep
-                  ? <Ionicons name="checkmark" size={12} color="#fff" />
-                  : <Text style={[styles.dotNum, i === currentStep && { color: '#f0a500' }]}>{i + 1}</Text>}
-              </View>
-              <Text style={[styles.dotLabel, i === currentStep && { color: '#f0a500' }]}>{s.labelHindi}</Text>
+          {savedSuccess && (
+            <View style={styles.successBanner}>
+              <Ionicons name="checkmark-circle" size={20} color="#fff" />
+              <Text style={styles.successText}>✅ रिकॉर्ड सफलतापूर्वक सहेजा गया!</Text>
             </View>
-          ))}
-        </View>
+          )}
 
-        {/* Card */}
-        <View style={styles.card}>
-
-          {/* TTS speaker */}
-          <View style={styles.speakerRow}>
-            <Animated.View style={[styles.speakerCircle, { transform: [{ scale: pulseAnim }], borderColor: isSpeaking ? '#f0a500' : '#2d2d4e', backgroundColor: isSpeaking ? 'rgba(240,165,0,0.15)' : '#0f0f1e' }]}>
-              <Ionicons name={isSpeaking ? 'volume-high' : 'volume-medium-outline'} size={24} color={isSpeaking ? '#f0a500' : '#666'} />
-            </Animated.View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.micLabel}>{step.labelHindi} / {step.label}</Text>
-              <Text style={styles.micHindi}>{step.promptHindi}</Text>
-              <Text style={styles.micEn}>{step.promptEn}</Text>
-            </View>
+          <View style={styles.seasonRow}>
+            <SeasonSelector />
           </View>
 
-          {/* ── DATE STEP: segmented display + numeric input ── */}
-          {isDateStep ? (
-            <View style={styles.dateWrapper}>
+          {/* Progress */}
+          <View style={styles.progressWrap}>
+            <View style={styles.progressTrack}>
+              <View style={[styles.progressFill, { width: `${progress}%` }]} />
+            </View>
+            <Text style={styles.progressText}>चरण {currentStep + 1} / {STEPS.length}</Text>
+          </View>
 
-              {/* DD / MM / YYYY visual segments */}
-              <View style={styles.segmentRow}>
-                <View style={[styles.segment, inputValue.length >= 2 && styles.segmentFilled]}>
-                  <Text style={styles.segLabel}>DD</Text>
-                  <Text style={styles.segValue}>{inputValue.slice(0, 2) || '--'}</Text>
+          {/* Step Dots */}
+          <View style={styles.stepsRow}>
+            {STEPS.map((s, i) => (
+              <View key={s.key} style={styles.stepItem}>
+                <View style={[styles.dot, i < currentStep && styles.dotDone, i === currentStep && styles.dotActive]}>
+                  {i < currentStep
+                    ? <Ionicons name="checkmark" size={12} color="#fff" />
+                    : <Text style={[styles.dotNum, i === currentStep && { color: '#f0a500' }]}>{i + 1}</Text>}
                 </View>
-                <Text style={styles.segSep}>/</Text>
-                <View style={[styles.segment, inputValue.length >= 5 && styles.segmentFilled]}>
-                  <Text style={styles.segLabel}>MM</Text>
-                  <Text style={styles.segValue}>{inputValue.slice(3, 5) || '--'}</Text>
-                </View>
-                <Text style={styles.segSep}>/</Text>
-                <View style={[styles.segment, styles.segmentWide, dateComplete && styles.segmentFilled]}>
-                  <Text style={styles.segLabel}>YYYY</Text>
-                  <Text style={styles.segValue}>{inputValue.slice(6, 10) || '----'}</Text>
-                </View>
-                {dateComplete && (
-                  <Ionicons
-                    name={dateValid ? 'checkmark-circle' : 'close-circle'}
-                    size={24}
-                    color={dateValid ? '#2ecc71' : '#e74c3c'}
-                    style={{ marginLeft: 8 }}
-                  />
-                )}
+                <Text style={[styles.dotLabel, i === currentStep && { color: '#f0a500' }]}>{s.labelHindi}</Text>
               </View>
+            ))}
+          </View>
 
-              {/* Input + mic */}
-              <View style={styles.inputRow}>
-                <TextInput
-                  style={[styles.input, isListening && styles.inputListening]}
-                  value={inputValue}
-                  onChangeText={handleInputChange}
-                  placeholder="DD/MM/YYYY"
-                  placeholderTextColor="#555"
-                  keyboardType="numeric"
-                  maxLength={10}
-                  autoCorrect={false}
-                  returnKeyType="done"
-                  onSubmitEditing={handleNext}
-                />
-                <Animated.View style={{ transform: [{ scale: micPulseAnim }] }}>
-                  <View
-                    {...micPanResponder.panHandlers}
-                    style={[styles.sttBtn, isListening && styles.sttBtnActive]}
-                  >
-                    <Ionicons name={isListening ? 'mic' : 'mic-outline'} size={22} color={isListening ? '#fff' : '#f0a500'} />
+          {/* Card */}
+          <View style={styles.card}>
+
+            {/* TTS speaker */}
+            <View style={styles.speakerRow}>
+              <Animated.View style={[styles.speakerCircle, {
+                transform: [{ scale: speaker.anim }],
+                borderColor: isSpeaking ? '#f0a500' : '#2d2d4e',
+                backgroundColor: isSpeaking ? 'rgba(240,165,0,0.15)' : '#0f0f1e',
+              }]}>
+                <Ionicons name={isSpeaking ? 'volume-high' : 'volume-medium-outline'} size={24} color={isSpeaking ? '#f0a500' : '#666'} />
+              </Animated.View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.micLabel}>{step.labelHindi} / {step.label}</Text>
+                <Text style={styles.micHindi}>{step.promptHindi}</Text>
+                <Text style={styles.micEn}>{step.promptEn}</Text>
+              </View>
+            </View>
+
+            {/* ── DATE STEP ── */}
+            {isDateStep ? (
+              <View style={styles.dateWrapper}>
+                <View style={styles.segmentRow}>
+                  <View style={[styles.segment, inputValue.length >= 2 && styles.segmentFilled]}>
+                    <Text style={styles.segLabel}>DD</Text>
+                    <Text style={styles.segValue}>{inputValue.slice(0, 2) || '--'}</Text>
                   </View>
-                </Animated.View>
-              </View>
-
-              {/* Hint text */}
-              <Text style={[styles.dateHint, dateComplete && !dateValid && { color: '#e74c3c' }]}>
-                {!inputValue
-                  ? '📅 Type digits — / added automatically'
-                  : dateComplete
-                    ? dateValid ? '✅ Valid date / सही तारीख' : '❌ Invalid date / गलत तारीख'
-                    : `${10 - inputValue.length} more digit${10 - inputValue.length !== 1 ? 's' : ''} needed`}
-              </Text>
-            </View>
-
-          ) : isCommentStep ? (
-            /* ── COMMENT STEP ── */
-            <View style={styles.commentWrapper}>
-              <View style={styles.inputRow}>
-                <TextInput
-                  style={[styles.input, styles.commentInput, isListening && styles.inputListening]}
-                  value={inputValue} onChangeText={setInputValue}
-                  placeholder={step.placeholder} placeholderTextColor="#555"
-                  keyboardType="default" multiline numberOfLines={4}
-                  autoCorrect={false} textAlignVertical="top"
-                />
-              </View>
-              {/* Mic button below for comment (larger target) */}
-              <View style={styles.commentMicRow}>
-                <Animated.View style={{ transform: [{ scale: micPulseAnim }] }}>
-                  <View {...micPanResponder.panHandlers} 
-                    style={[styles.sttBtnLarge, isListening && styles.sttBtnActive]}>
-                    <Ionicons name={isListening ? 'mic' : 'mic-outline'} size={28} color={isListening ? '#fff' : '#f0a500'} />
-                    <Text style={[styles.holdText, isListening && { color: '#fff' }]}>
-                      {isListening ? 'Recording...' : 'Hold to speak'}
-                    </Text>
+                  <Text style={styles.segSep}>/</Text>
+                  <View style={[styles.segment, inputValue.length >= 5 && styles.segmentFilled]}>
+                    <Text style={styles.segLabel}>MM</Text>
+                    <Text style={styles.segValue}>{inputValue.slice(3, 5) || '--'}</Text>
                   </View>
-                </Animated.View>
-              </View>
-              <Text style={styles.optionalHint}>⬆ Optional / वैकल्पिक — you can skip this step</Text>
-            </View>
-
-          ) : isOwnerStep ? (
-            /* ── OWNER STEP ── */
-            <View>
-              {/* Radio options */}
-              <TouchableOpacity
-                style={[styles.ownerOption, ownerType === 'self' && styles.ownerOptionSelected]}
-                onPress={() => { setOwnerType('self'); setInputValue("मेरा गन्ना"); }}
-              >
-                <View style={[styles.radioCircle, ownerType === 'self' && styles.radioSelected]}>
-                  {ownerType === 'self' && <View style={styles.radioDot} />}
+                  <Text style={styles.segSep}>/</Text>
+                  <View style={[styles.segment, styles.segmentWide, dateComplete && styles.segmentFilled]}>
+                    <Text style={styles.segLabel}>YYYY</Text>
+                    <Text style={styles.segValue}>{inputValue.slice(6, 10) || '----'}</Text>
+                  </View>
+                  {dateComplete && (
+                    <Ionicons
+                      name={dateValid ? 'checkmark-circle' : 'close-circle'}
+                      size={24}
+                      color={dateValid ? '#2ecc71' : '#e74c3c'}
+                      style={{ marginLeft: 8 }}
+                    />
+                  )}
                 </View>
-                <Text style={[styles.ownerOptionTitle, ownerType === 'self' && { color: '#2ecc71' }]}>
-                  मेरा खुद का गन्ना है
-                </Text>
-              </TouchableOpacity>
 
-              <TouchableOpacity
-                style={[styles.ownerOption, ownerType === 'other' && styles.ownerOptionOtherSelected]}
-                onPress={() => { setOwnerType('other'); setInputValue(''); }}
-              >
-                <View style={[styles.radioCircle, ownerType === 'other' && styles.radioOtherSelected]}>
-                  {ownerType === 'other' && <View style={styles.radioDotOther} />}
-                </View>
-                <Text style={[styles.ownerOptionTitle, ownerType === 'other' && { color: '#f0a500' }]}>
-                  दूसरे का गन्ना है
-                </Text>
-              </TouchableOpacity>
-
-              {/* Name input — same style as other inputs, shown when 'other' selected */}
-              {ownerType === 'other' && (
                 <View style={styles.inputRow}>
                   <TextInput
-                    style={styles.input}
+                    style={[styles.input, isListening && styles.inputListening]}
                     value={inputValue}
-                    onChangeText={setInputValue}
-                    placeholder="मालिक का नाम / Owner Name"
+                    onChangeText={handleInputChange}
+                    placeholder="DD/MM/YYYY"
                     placeholderTextColor="#555"
+                    keyboardType="numeric"
+                    maxLength={10}
                     autoCorrect={false}
-                    autoFocus
                     returnKeyType="done"
                     onSubmitEditing={handleNext}
                   />
-                  <Animated.View style={{ transform: [{ scale: micPulseAnim }] }}>
+                  <Animated.View style={{ transform: [{ scale: mic.anim }] }}>
                     <View
                       {...micPanResponder.panHandlers}
                       style={[styles.sttBtn, isListening && styles.sttBtnActive]}
@@ -498,238 +474,322 @@ export default function VoiceInputScreen(): React.ReactElement {
                     </View>
                   </Animated.View>
                 </View>
-              )}
-            </View>
-          ) : (
-            /* ── OTHER STEPS: normal input + mic ── */
-            <View style={styles.inputRow}>
-              <TextInput
-                style={[styles.input, isListening && styles.inputListening]}
-                value={inputValue}
-                onChangeText={handleInputChange}
-                placeholder={step.placeholder}
-                placeholderTextColor="#555"
-                keyboardType={step.keyboardType}
-                autoCorrect={false}
-                returnKeyType="done"
-                onSubmitEditing={handleNext}
-              />
-              <Animated.View style={{ transform: [{ scale: micPulseAnim }] }}>
-                <View
-                  {...micPanResponder.panHandlers}
-                  style={[styles.sttBtn, isListening && styles.sttBtnActive]}
-                >
-                  <Ionicons name={isListening ? 'mic' : 'mic-outline'} size={22} color={isListening ? '#fff' : '#f0a500'} />
+
+                <Text style={[styles.dateHint, dateComplete && !dateValid && { color: '#e74c3c' }]}>
+                  {!inputValue
+                    ? '📅 अंक टाइप करें — / अपने आप जुड़ेगा'
+                    : dateComplete
+                      ? dateValid ? '✅ सही तारीख' : '❌ गलत तारीख'
+                      : `${10 - inputValue.length} अंक और चाहिए`}
+                </Text>
+              </View>
+
+            ) : isCommentStep ? (
+              /* ── COMMENT STEP ── */
+              <View style={styles.commentWrapper}>
+                <View style={styles.inputRow}>
+                  <TextInput
+                    style={[styles.input, styles.commentInput, isListening && styles.inputListening]}
+                    value={inputValue} onChangeText={setInputValue}
+                    placeholder={step.placeholder} placeholderTextColor="#555"
+                    keyboardType="default" multiline numberOfLines={4}
+                    autoCorrect={false} textAlignVertical="top"
+                  />
                 </View>
-              </Animated.View>
+                <View style={styles.commentMicRow}>
+                  <Animated.View style={{ transform: [{ scale: mic.anim }] }}>
+                    <View {...micPanResponder.panHandlers}
+                      style={[styles.sttBtnLarge, isListening && styles.sttBtnActive]}>
+                      <Ionicons name={isListening ? 'mic' : 'mic-outline'} size={28} color={isListening ? '#fff' : '#f0a500'} />
+                      <Text style={[styles.holdText, isListening && { color: '#fff' }]}>
+                        {isListening ? 'रिकॉर्ड हो रहा है...' : 'माइक दबाएं'}
+                      </Text>
+                    </View>
+                  </Animated.View>
+                </View>
+                <Text style={styles.optionalHint}>⬆ वैकल्पिक — यह चरण छोड़ सकते हैं</Text>
+              </View>
+
+            ) : isOwnerStep ? (
+              /* ── OWNER STEP ── */
+              <View>
+                <TouchableOpacity
+                  style={[styles.ownerOption, ownerType === 'self' && styles.ownerOptionSelected]}
+                  onPress={() => { setOwnerType('self'); setInputValue('मेरा गन्ना'); }}
+                >
+                  <View style={[styles.radioCircle, ownerType === 'self' && styles.radioSelected]}>
+                    {ownerType === 'self' && <View style={styles.radioDot} />}
+                  </View>
+                  <Text style={[styles.ownerOptionTitle, ownerType === 'self' && { color: '#2ecc71' }]}>
+                    मेरा खुद का गन्ना है
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.ownerOption, ownerType === 'other' && styles.ownerOptionOtherSelected]}
+                  onPress={() => { setOwnerType('other'); setInputValue(''); }}
+                >
+                  <View style={[styles.radioCircle, ownerType === 'other' && styles.radioOtherSelected]}>
+                    {ownerType === 'other' && <View style={styles.radioDotOther} />}
+                  </View>
+                  <Text style={[styles.ownerOptionTitle, ownerType === 'other' && { color: '#f0a500' }]}>
+                    दूसरे का गन्ना है
+                  </Text>
+                </TouchableOpacity>
+
+                {ownerType === 'other' && (
+                  <View style={styles.inputRow}>
+                    <TextInput
+                      style={styles.input}
+                      value={inputValue}
+                      onChangeText={setInputValue}
+                      placeholder="मालिक का नाम / Owner Name"
+                      placeholderTextColor="#555"
+                      autoCorrect={false}
+                      autoFocus
+                      returnKeyType="done"
+                      onSubmitEditing={handleNext}
+                    />
+                    <Animated.View style={{ transform: [{ scale: mic.anim }] }}>
+                      <View
+                        {...micPanResponder.panHandlers}
+                        style={[styles.sttBtn, isListening && styles.sttBtnActive]}
+                      >
+                        <Ionicons name={isListening ? 'mic' : 'mic-outline'} size={22} color={isListening ? '#fff' : '#f0a500'} />
+                      </View>
+                    </Animated.View>
+                  </View>
+                )}
+              </View>
+            ) : (
+              /* ── OTHER STEPS ── */
+              <View style={styles.inputRow}>
+                <TextInput
+                  style={[styles.input, isListening && styles.inputListening]}
+                  value={inputValue}
+                  onChangeText={handleInputChange}
+                  placeholder={step.placeholder}
+                  placeholderTextColor="#555"
+                  keyboardType={step.keyboardType}
+                  autoCorrect={false}
+                  returnKeyType="done"
+                  onSubmitEditing={handleNext}
+                />
+                <Animated.View style={{ transform: [{ scale: mic.anim }] }}>
+                  <View
+                    {...micPanResponder.panHandlers}
+                    style={[styles.sttBtn, isListening && styles.sttBtnActive]}
+                  >
+                    <Ionicons name={isListening ? 'mic' : 'mic-outline'} size={22} color={isListening ? '#fff' : '#f0a500'} />
+                  </View>
+                </Animated.View>
+              </View>
+            )}
+
+            {/* Hold-to-record hint */}
+            {!isCommentStep && (
+              <View style={styles.holdHintRow}>
+                <Ionicons name="information-circle-outline" size={13} color="#555" />
+                <Text style={styles.holdHintText}>माइक दबाकर रखें और बोलें</Text>
+              </View>
+            )}
+
+            {/* Listening bar */}
+            {isListening && (
+              <View style={styles.listeningBar}>
+                <View style={styles.listeningDot} />
+                <Text style={styles.listeningText}>सुन रहा है...</Text>
+                <TouchableOpacity onPress={stopListening}>
+                  <Text style={styles.stopText}>रोकें</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {!!micError && <Text style={styles.micErrorText}>⚠ {micError}</Text>}
+
+            <TouchableOpacity style={styles.replayBtn} onPress={() => speakText(step.speak)}>
+              <Ionicons name="volume-medium-outline" size={16} color="#f0a500" />
+              <Text style={styles.replayText}>प्रश्न दोहराएं</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.nextBtn} onPress={handleNext} activeOpacity={0.8}>
+              <Text style={styles.nextBtnText}>
+                {isCommentStep ? 'समाप्त करें →'
+                  : currentStep < STEPS.length - 1 ? 'आगे →'
+                    : 'समीक्षा करें'}
+              </Text>
+            </TouchableOpacity>
+            {currentStep > 0 && (<TouchableOpacity style={styles.backBtn} onPress={handleBack} activeOpacity={0.8}>
+              <Text style={styles.backBtnText}>
+                ↲ पीछे
+              </Text>
+            </TouchableOpacity>)}
+
+            {isCommentStep && (
+              <TouchableOpacity style={styles.skipBtn} onPress={() => handleConfirmWithValue('')}>
+                <Text style={styles.skipBtnText}>टिप्पणी छोड़ें</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
+          {/* Confirmed values */}
+          {Object.keys(confirmedValues).length > 0 && (
+            <View style={styles.confirmedCard}>
+              <Text style={styles.confirmedTitle}>✔ पुष्टि की गई</Text>
+              {(Object.entries(confirmedValues) as [keyof FormData, string][]).map(([key, val]) => {
+                const s = STEPS.find(x => x.key === key);
+                return (
+                  <View key={key} style={styles.confirmedRow}>
+                    <Text style={styles.confirmedKey}>{s?.labelHindi}:</Text>
+                    <Text style={styles.confirmedVal}>{val}</Text>
+                  </View>
+                );
+              })}
             </View>
           )}
 
-          {/* Hold-to-record hint (not shown on comment step — it has its own) */}
-          {!isCommentStep && (
-            <View style={styles.holdHintRow}>
-              <Ionicons name="information-circle-outline" size={13} color="#555" />
-              <Text style={styles.holdHintText}>Hold mic button to record / माइक दबाकर रखें</Text>
-            </View>
-          )}
-
-          {/* Listening bar */}
-          {isListening && (
-            <View style={styles.listeningBar}>
-              <View style={styles.listeningDot} />
-              <Text style={styles.listeningText}>सुन रहा है... / Listening...</Text>
-              <TouchableOpacity ><Text style={styles.stopText}>Stop</Text></TouchableOpacity>
-            </View>
-          )}
-
-          {!!micError && <Text style={styles.micErrorText}>⚠ {micError}</Text>}
-
-          <TouchableOpacity style={styles.replayBtn} onPress={() => speakText(step.speak)}>
-            <Ionicons name="volume-medium-outline" size={16} color="#f0a500" />
-            <Text style={styles.replayText}>Repeat Question / प्रश्न दोहराएं</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.nextBtn} onPress={handleNext} activeOpacity={0.8}>
-            <Text style={styles.nextBtnText}>
-              {isCommentStep ? 'Finish / समाप्त करें →'
-                : currentStep < STEPS.length - 1 ? 'Next / आगे →'
-                  : 'Review / समीक्षा करें'}
-            </Text>
-          </TouchableOpacity>
-          {currentStep > 0 && (<TouchableOpacity style={styles.backBtn} onPress={handleBack} activeOpacity={0.8}>
-            <Text style={styles.backBtnText}>
-              ↲ Back / पीछे
-            </Text>
-          </TouchableOpacity>)}
-
-          {isCommentStep && (
-            <TouchableOpacity style={styles.skipBtn} onPress={() => handleConfirmWithValue('')}>
-              <Text style={styles.skipBtnText}>Skip Comment / टिप्पणी छोड़ें</Text>
+          {currentStep > 0 && (
+            <TouchableOpacity style={styles.resetBtn} onPress={resetForm}>
+              <Ionicons name="refresh" size={14} color="#e74c3c" />
+              <Text style={styles.resetText}>फिर से शुरू करें</Text>
             </TouchableOpacity>
           )}
-        </View>
 
-        {/* Confirmed values */}
-        {Object.keys(confirmedValues).length > 0 && (
-          <View style={styles.confirmedCard}>
-            <Text style={styles.confirmedTitle}>✔ Confirmed / पुष्टि की गई</Text>
-            {(Object.entries(confirmedValues) as [keyof FormData, string][]).map(([key, val]) => {
-              const s = STEPS.find(x => x.key === key);
-              return (
-                <View key={key} style={styles.confirmedRow}>
-                  <Text style={styles.confirmedKey}>{s?.labelHindi}:</Text>
-                  <Text style={styles.confirmedVal}>{val}</Text>
+          {/* Confirm Modal */}
+          <Modal visible={showConfirmModal} transparent animationType="fade">
+            <View style={styles.overlay}>
+              <View style={styles.modalCard}>
+                <Text style={styles.modalTitle}>पुष्टि करें</Text>
+                <Text style={styles.modalSubtitle}>{step?.labelHindi} / {step?.label}</Text>
+                <View style={styles.modalValueBox}><Text style={styles.modalValue}>{inputValue}</Text></View>
+                <Text style={styles.modalQuestion}>क्या यह सही है?</Text>
+                <View style={styles.modalBtns}>
+                  <TouchableOpacity style={[styles.modalBtn, { backgroundColor: '#e74c3c' }]} onPress={handleConfirmNo}>
+                    <Ionicons name="close" size={18} color="#fff" /><Text style={styles.modalBtnText}>नहीं</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[styles.modalBtn, { backgroundColor: '#2ecc71' }]} onPress={handleConfirmYes}>
+                    <Ionicons name="checkmark" size={18} color="#fff" /><Text style={styles.modalBtnText}>हाँ</Text>
+                  </TouchableOpacity>
                 </View>
-              );
-            })}
-          </View>
-        )}
-
-        {currentStep > 0 && (
-          <TouchableOpacity style={styles.resetBtn} onPress={resetForm}>
-            <Ionicons name="refresh" size={14} color="#e74c3c" />
-            <Text style={styles.resetText}>Start Over / फिर से शुरू करें</Text>
-          </TouchableOpacity>
-        )}
-
-        {/* Confirm Modal */}
-        <Modal visible={showConfirmModal} transparent animationType="fade">
-          <View style={styles.overlay}>
-            <View style={styles.modalCard}>
-              <Text style={styles.modalTitle}>Confirm / पुष्टि करें</Text>
-              <Text style={styles.modalSubtitle}>{step?.labelHindi} / {step?.label}</Text>
-              <View style={styles.modalValueBox}><Text style={styles.modalValue}>{inputValue}</Text></View>
-              <Text style={styles.modalQuestion}>Is this correct? / क्या यह सही है?</Text>
-              <View style={styles.modalBtns}>
-                <TouchableOpacity style={[styles.modalBtn, { backgroundColor: '#e74c3c' }]} onPress={handleConfirmNo}>
-                  <Ionicons name="close" size={18} color="#fff" /><Text style={styles.modalBtnText}>No / नहीं</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={[styles.modalBtn, { backgroundColor: '#2ecc71' }]} onPress={handleConfirmYes}>
-                  <Ionicons name="checkmark" size={18} color="#fff" /><Text style={styles.modalBtnText}>Yes / हाँ</Text>
-                </TouchableOpacity>
               </View>
             </View>
-          </View>
-        </Modal>
+          </Modal>
 
-        {/* ── Farmer Found Modal ── */}
-        <Modal visible={showFarmerModal} transparent animationType="fade">
-          <View style={styles.overlay}>
-            <View style={styles.modalCard}>
+          {/* ── Farmer Found Modal ── */}
+          <Modal visible={showFarmerModal} transparent animationType="fade">
+            <View style={styles.overlay}>
+              <View style={styles.modalCard}>
+                <View style={styles.farmerModalHeader}>
+                  <Ionicons name="person-circle-outline" size={48} color="#f0a500" />
+                  <Text style={styles.farmerModalTitle}>किसान मिला</Text>
+                </View>
 
-              {/* Header */}
-              <View style={styles.farmerModalHeader}>
-                <Ionicons name="person-circle-outline" size={48} color="#f0a500" />
-                <Text style={styles.farmerModalTitle}>किसान मिला / Farmer Found</Text>
-              </View>
-
-              {/* Name card */}
-              <View style={styles.farmerInfoCard}>
-                <View style={styles.farmerInfoRow}>
-                  <View style={styles.farmerInfoIcon}>
-                    <Ionicons name="person-outline" size={16} color="#f0a500" />
+                <View style={styles.farmerInfoCard}>
+                  <View style={styles.farmerInfoRow}>
+                    <View style={styles.farmerInfoIcon}>
+                      <Ionicons name="person-outline" size={16} color="#f0a500" />
+                    </View>
+                    <View>
+                      <Text style={styles.farmerInfoLabel}>नाम</Text>
+                      <Text style={styles.farmerInfoValue}>{foundPerson?.name}</Text>
+                    </View>
                   </View>
-                  <View>
-                    <Text style={styles.farmerInfoLabel}>नाम / Name</Text>
-                    <Text style={styles.farmerInfoValue}>{foundPerson?.name}</Text>
+
+                  <View style={styles.farmerDivider} />
+
+                  <View style={styles.farmerInfoRow}>
+                    <View style={styles.farmerInfoIcon}>
+                      <Ionicons name="people-outline" size={16} color="#f0a500" />
+                    </View>
+                    <View>
+                      <Text style={styles.farmerInfoLabel}>पिता का नाम</Text>
+                      <Text style={styles.farmerInfoValue}>{foundPerson?.fatherName}</Text>
+                    </View>
                   </View>
                 </View>
 
-                <View style={styles.farmerDivider} />
+                <Text style={styles.farmerModalQuestion}>क्या यह सही है?</Text>
 
-                <View style={styles.farmerInfoRow}>
-                  <View style={styles.farmerInfoIcon}>
-                    <Ionicons name="people-outline" size={16} color="#f0a500" />
-                  </View>
-                  <View>
-                    <Text style={styles.farmerInfoLabel}>पिता का नाम / Father</Text>
-                    <Text style={styles.farmerInfoValue}>{foundPerson?.fatherName}</Text>
-                  </View>
+                <View style={styles.modalBtns}>
+                  <TouchableOpacity
+                    style={[styles.modalBtn, { backgroundColor: '#e74c3c' }]}
+                    onPress={() => {
+                      setShowFarmerModal(false);
+                      setFoundPerson(null);
+                      setCurrentStep(1);
+                      setTimeout(() => speakText(STEPS[1].speak), 400);
+                    }}
+                  >
+                    <Ionicons name="close" size={18} color="#fff" />
+                    <Text style={styles.modalBtnText}>नहीं</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.modalBtn, { backgroundColor: '#2ecc71' }]}
+                    onPress={() => {
+                      if (!foundPerson) return;
+                      setFormData(prev => ({
+                        ...prev,
+                        name: foundPerson.name,
+                        fatherName: foundPerson.fatherName,
+                      }));
+                      setConfirmedValues(prev => ({
+                        ...prev,
+                        name: foundPerson.name,
+                        fatherName: foundPerson.fatherName,
+                      }));
+                      setShowFarmerModal(false);
+                      setFoundPerson(null);
+                      setCurrentStep(3);
+                      setTimeout(() => speakText(`${foundPerson.name} की पुष्टि हुई। ${STEPS[3].speak}`), 400);
+                    }}
+                  >
+                    <Ionicons name="checkmark" size={18} color="#fff" />
+                    <Text style={styles.modalBtnText}>हाँ</Text>
+                  </TouchableOpacity>
+                </View>
+
+              </View>
+            </View>
+          </Modal>
+
+          {/* Summary Modal */}
+          <Modal visible={showSummaryModal} transparent animationType="slide">
+            <View style={styles.overlay}>
+              <View style={styles.modalCard}>
+                <Text style={styles.modalTitle}>📋 समीक्षा</Text>
+                <View style={{ marginTop: 12, marginBottom: 16 }}>
+                  {STEPS.map(s => (
+                    <View key={s.key} style={styles.summaryRow}>
+                      <Text style={styles.summaryKey}>{s.labelHindi}:</Text>
+                      <Text style={styles.summaryVal}>{formData[s.key]}</Text>
+                    </View>
+                  ))}
+                </View>
+                <View style={styles.modalBtns}>
+                  <TouchableOpacity style={[styles.modalBtn, { backgroundColor: '#e74c3c' }]} onPress={() => { setShowSummaryModal(false); resetForm(); }}>
+                    <Ionicons name="close" size={18} color="#fff" /><Text style={styles.modalBtnText}>रद्द करें</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[styles.modalBtn, { backgroundColor: '#2ecc71' }]} onPress={handleSave} disabled={isLoading}>
+                    {isLoading
+                      ? <ActivityIndicator color="#fff" size="small" />
+                      : <><Ionicons name="save" size={18} color="#fff" /><Text style={styles.modalBtnText}>सहेजें</Text></>}
+                  </TouchableOpacity>
                 </View>
               </View>
-
-              <Text style={styles.farmerModalQuestion}>क्या यह सही है? / Is this correct?</Text>
-
-              {/* Buttons */}
-              <View style={styles.modalBtns}>
-                <TouchableOpacity
-                  style={[styles.modalBtn, { backgroundColor: '#e74c3c' }]}
-                  onPress={() => {
-                    setShowFarmerModal(false);
-                    setFoundPerson(null);
-                    setCurrentStep(1);
-                    speakText('कृपया नाम दर्ज करें।');
-                  }}
-                >
-                  <Ionicons name="close" size={18} color="#fff" />
-                  <Text style={styles.modalBtnText}>नहीं / No</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[styles.modalBtn, { backgroundColor: '#2ecc71' }]}
-                  onPress={() => {
-                    if (!foundPerson) return;
-                    setFormData(prev => ({
-                      ...prev,
-                      name: foundPerson.name,
-                      fatherName: foundPerson.fatherName,
-                    }));
-                    setConfirmedValues(prev => ({
-                      ...prev,
-                      name: foundPerson.name,
-                      fatherName: foundPerson.fatherName,
-                    }));
-                    setShowFarmerModal(false);
-                    setFoundPerson(null);
-                    setCurrentStep(3);
-                    speakText(`${foundPerson.name} की पुष्टि हुई। कृपया गन्ने के मालिक का नाम बोलें।`);
-                  }}
-                >
-                  <Ionicons name="checkmark" size={18} color="#fff" />
-                  <Text style={styles.modalBtnText}>हाँ / Yes</Text>
-                </TouchableOpacity>
-              </View>
-
             </View>
-          </View>
-        </Modal>
+          </Modal>
 
-        {/* Summary Modal */}
-        <Modal visible={showSummaryModal} transparent animationType="slide">
-          <View style={styles.overlay}>
-            <View style={styles.modalCard}>
-              <Text style={styles.modalTitle}>📋 Review Record / समीक्षा</Text>
-              <View style={{ marginTop: 12, marginBottom: 16 }}>
-                {STEPS.map(s => (
-                  <View key={s.key} style={styles.summaryRow}>
-                    <Text style={styles.summaryKey}>{s.labelHindi}:</Text>
-                    <Text style={styles.summaryVal}>{formData[s.key]}</Text>
-                  </View>
-                ))}
-              </View>
-              <View style={styles.modalBtns}>
-                <TouchableOpacity style={[styles.modalBtn, { backgroundColor: '#e74c3c' }]} onPress={() => { setShowSummaryModal(false); resetForm(); }}>
-                  <Ionicons name="close" size={18} color="#fff" /><Text style={styles.modalBtnText}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={[styles.modalBtn, { backgroundColor: '#2ecc71' }]} onPress={handleSave} disabled={isLoading}>
-                  {isLoading
-                    ? <ActivityIndicator color="#fff" size="small" />
-                    : <><Ionicons name="save" size={18} color="#fff" /><Text style={styles.modalBtnText}>Save / सहेजें</Text></>}
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        </Modal>
-
-      </ScrollView>
-    </View>
+        </ScrollView>
+      </View>
+    </KeyboardAvoidingView>
   );
 }
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#0f0f1e', paddingTop:20 },
+  safe: { flex: 1, backgroundColor: '#0f0f1e' },
   content: { padding: 16, paddingBottom: 5 },
 
   seasonRow: {
@@ -787,11 +847,9 @@ const styles = StyleSheet.create({
   holdText: { color: '#f0a500', fontSize: 13, fontWeight: '600' },
   optionalHint: { color: '#555', fontSize: 11, textAlign: 'center' },
 
-  // Hold hint
   holdHintRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 8 },
   holdHintText: { color: '#555', fontSize: 11 },
 
-  // ── Input row ──
   inputRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 },
   input: { flex: 1, backgroundColor: '#0f0f1e', borderRadius: 10, padding: 13, color: '#f0f0f0', fontSize: 16, fontWeight: '600', borderWidth: 1.5, borderColor: '#2d2d4e' },
   inputListening: { borderColor: '#e74c3c', backgroundColor: 'rgba(231,76,60,0.06)' },

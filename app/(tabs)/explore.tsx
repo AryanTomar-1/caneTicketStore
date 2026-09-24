@@ -1,16 +1,17 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity,
   FlatList, Modal, Alert, RefreshControl, Animated, PanResponder,
-  Share, Linking, ListRenderItem,
+  Share, Linking, ListRenderItem, KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { useFocusEffect } from 'expo-router';
-//import { SafeAreaView } from 'react-native-safe-area-context';
+import { useIsFocused } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from 'expo-speech-recognition';
 
 import { getAllTickets, deleteTicket, updateTicket, formatDateTime, checkDuplicate } from '../../utils/storage';
-import { formatDateInput, isValidDate } from '../../utils/dateHelpers';
+import { formatDateInput, isValidDate, sanitizeFilterDate } from '../../utils/dateHelpers';
 import { useMicPulse } from '../../hooks/useMicPulse';
 import { Ticket } from '../../types';
 import SeasonSelector from '../../components/SeasonSelector';
@@ -19,6 +20,9 @@ import { useSeason } from '../../context/SeasonContext';
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function DashboardScreen(): React.ReactElement {
+  const insets = useSafeAreaInsets();
+  const isFocused = useIsFocused();
+
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [filtered, setFiltered] = useState<Ticket[]>([]);
   const [searchText, setSearchText] = useState('');
@@ -29,7 +33,7 @@ export default function DashboardScreen(): React.ReactElement {
   const [showDateInput, setShowDateInput] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [isSearchListening, setIsSearchListening] = useState(false);
-  const { selectedSeason } = useSeason(); // import from context
+  const { selectedSeason } = useSeason();
 
   const [selectedOwners, setSelectedOwners] = useState<string[]>([]);
   const [showOwnerModal, setShowOwnerModal] = useState(false);
@@ -39,22 +43,43 @@ export default function DashboardScreen(): React.ReactElement {
   const totalQty = filtered.reduce((sum, t) => sum + (parseFloat(String(t.quantity)) || 0), 0);
   const hasFilters = searchText || selectedNames.length > 0 || selectedOwners.length > 0 || filterDate;
   const [pricePerQty, setPricePerQty] = useState<string>('');
-  const totalAmount = pricePerQty ? (totalQty * parseFloat(pricePerQty)).toFixed(2) : null;
+  const priceNum = parseFloat(pricePerQty);
+  const totalAmount = pricePerQty && !isNaN(priceNum) ? (totalQty * priceNum).toFixed(2) : null;
 
   // Edit modal
   const [editTicket, setEditTicket] = useState<Ticket | null>(null);
-  const [editForm, setEditForm] = useState({ name: '', fatherName: '', date: '', quantity: '', comment: '' });
+  const [editForm, setEditForm] = useState({
+    farmer_code: '',
+    name: '',
+    fatherName: '',
+    caneOwner: '',
+    date: '',
+    quantity: '',
+    comment: '',
+  });
 
   const mic = useMicPulse();
 
-  // ── STT for search ────────────────────────────────────────────────────────
-  useSpeechRecognitionEvent('start', () => setIsSearchListening(true));
-  useSpeechRecognitionEvent('end', () => { setIsSearchListening(false); mic.stop(); });
+  // ── STT for search (gated by focus) ───────────────────────────────────────
+  useSpeechRecognitionEvent('start', () => {
+    if (!isFocused) return;
+    setIsSearchListening(true);
+  });
+  useSpeechRecognitionEvent('end', () => {
+    if (!isFocused) return;
+    setIsSearchListening(false);
+    mic.stop();
+  });
   useSpeechRecognitionEvent('result', (event) => {
+    if (!isFocused) return;
     const result = event.results[0]?.transcript ?? '';
     if (result) handleSearch(result);
   });
-  useSpeechRecognitionEvent('error', () => { setIsSearchListening(false); mic.stop(); });
+  useSpeechRecognitionEvent('error', () => {
+    if (!isFocused) return;
+    setIsSearchListening(false);
+    mic.stop();
+  });
 
   const startSearchListening = async (): Promise<void> => {
     try {
@@ -79,28 +104,44 @@ export default function DashboardScreen(): React.ReactElement {
   });
 
   // ── Data ──────────────────────────────────────────────────────────────────
-  // Replace the deleted useEffects with this one:
   useFocusEffect(
     useCallback(() => {
       loadData();
-    }, [selectedSeason]) // reload when season changes too
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selectedSeason]) // reload when season changes
   );
 
-  const loadData = async () => {
-    let data = await getAllTickets();
-    setUniqueOwners([...new Set(data.map(t => t.caneOwner).filter(Boolean))].sort());
-    if (selectedOwners.length > 0) {
-      data = data.filter(t => selectedOwners.includes(t.caneOwner));
-    }
-    setTickets(data);
-    setUniqueNames([...new Set(data.map(t => t.name))].sort());
-    applyFilters(data, searchText, selectedNames, filterDate);
+  const loadData = async (
+    overrideOwners?: string[],
+    overrideSearch?: string,
+    overrideNames?: string[],
+    overrideDate?: string,
+  ) => {
+    const allData = await getAllTickets();
+    const ownersToUse = overrideOwners ?? selectedOwners;
+    const searchToUse = overrideSearch ?? searchText;
+    const namesToUse = overrideNames ?? selectedNames;
+    const dateToUse = overrideDate ?? filterDate;
+
+    setUniqueOwners([...new Set(allData.map(t => t.caneOwner).filter(Boolean))].sort());
+    setTickets(allData);
+    setUniqueNames([...new Set(allData.map(t => t.name))].sort());
+    applyFilters(allData, searchToUse, namesToUse, dateToUse, ownersToUse);
   };
 
-  const applyFilters = (data: Ticket[], search: string, names: string[], date: string) => {
+  const applyFilters = (
+    data: Ticket[],
+    search: string,
+    names: string[],
+    date: string,
+    owners: string[],
+  ) => {
     let result = [...data];
-    // Filter by multiple selected names (OR logic)
+    // Owner filter
+    if (owners.length > 0) result = result.filter(t => owners.includes(t.caneOwner));
+    // Name filter
     if (names.length > 0) result = result.filter(t => names.includes(t.name));
+    // Search filter
     if (search.trim()) {
       const q = search.toLowerCase().trim();
       result = result.filter(t =>
@@ -109,7 +150,10 @@ export default function DashboardScreen(): React.ReactElement {
         t.farmer_code?.toLowerCase().includes(q)
       );
     }
+    // Date filter — free-form match (year only "2024", "03/2024", or partial DD)
     if (date.trim()) result = result.filter(t => t.date?.includes(date.trim()));
+
+    // Sort newest first
     result.sort((a, b) => {
       const parseDate = (d: string) => {
         if (!d) return 0;
@@ -123,53 +167,57 @@ export default function DashboardScreen(): React.ReactElement {
 
   const handleSearch = (text: string) => {
     setSearchText(text);
-    applyFilters(tickets, text, selectedNames, filterDate);
+    applyFilters(tickets, text, selectedNames, filterDate, selectedOwners);
   };
 
   const handleSelectOwner = (owner: string | null) => {
     if (owner === null) {
       setSelectedOwners([]);
       setShowOwnerModal(false);
+      applyFilters(tickets, searchText, selectedNames, filterDate, []);
       return;
     }
     const newOwners = selectedOwners.includes(owner)
       ? selectedOwners.filter(o => o !== owner)
       : [...selectedOwners, owner];
     setSelectedOwners(newOwners);
+    applyFilters(tickets, searchText, selectedNames, filterDate, newOwners);
   };
 
   const handleSelectName = (name: string | null) => {
     if (name === null) {
-      // Clear all
       setSelectedNames([]);
       setShowNamesModal(false);
-      applyFilters(tickets, searchText, [], filterDate);
+      applyFilters(tickets, searchText, [], filterDate, selectedOwners);
       return;
     }
     const newNames = selectedNames.includes(name)
-      ? selectedNames.filter(n => n !== name)  // deselect
-      : [...selectedNames, name];               // select
+      ? selectedNames.filter(n => n !== name)
+      : [...selectedNames, name];
     setSelectedNames(newNames);
-    applyFilters(tickets, searchText, newNames, filterDate);
-    // Don't close modal so user can select more
+    applyFilters(tickets, searchText, newNames, filterDate, selectedOwners);
   };
 
-  const handleDateFilter = (date: string) => {
-    const fmt = formatDateInput(date);
-    setFilterDate(fmt);
-    applyFilters(tickets, searchText, selectedNames, fmt);
+  const handleDateFilter = (text: string) => {
+    // Use sanitizeFilterDate — does NOT auto-format. Allows free-form: "2024", "03/2024", partial.
+    const sanitized = sanitizeFilterDate(text);
+    setFilterDate(sanitized);
+    applyFilters(tickets, searchText, selectedNames, sanitized, selectedOwners);
   };
 
   const clearFilters = () => {
-    setSearchText(''); setSelectedNames([]); setFilterDate('');
+    setSearchText('');
+    setSelectedNames([]);
+    setFilterDate('');
     setSelectedOwners([]);
-    setShowDateInput(false); setFiltered(tickets);
+    setShowDateInput(false);
+    setFiltered(tickets);
   };
 
   // ── Delete ────────────────────────────────────────────────────────────────
   const handleDelete = (id: string, name: string) => {
     Alert.alert(
-      'रिकॉर्ड हटाएं / Delete',
+      'रिकॉर्ड हटाएं',
       `"${name}" का टिकट हटाएं?`,
       [
         { text: 'रद्द करें', style: 'cancel' },
@@ -182,8 +230,10 @@ export default function DashboardScreen(): React.ReactElement {
   const openEdit = (ticket: Ticket) => {
     setEditTicket(ticket);
     setEditForm({
+      farmer_code: ticket.farmer_code,
       name: ticket.name,
       fatherName: ticket.fatherName,
+      caneOwner: ticket.caneOwner,
       date: ticket.date,
       quantity: String(ticket.quantity),
       comment: ticket.comment ?? '',
@@ -192,23 +242,24 @@ export default function DashboardScreen(): React.ReactElement {
 
   const handleEditSave = async () => {
     if (!editTicket) return;
-    const { name, fatherName, date, quantity, comment } = editForm;
+    const { farmer_code, name, fatherName, caneOwner, date, quantity, comment } = editForm;
 
-    if (!name.trim() || !fatherName.trim() || !date.trim() || !quantity.trim()) {
+    if (!farmer_code.trim() || !name.trim() || !fatherName.trim() || !caneOwner.trim() || !date.trim() || !quantity.trim()) {
       Alert.alert('आवश्यक', 'सभी फ़ील्ड भरें।'); return;
     }
     if (!isValidDate(date)) { Alert.alert('गलत तारीख', 'DD/MM/YYYY format में दर्ज करें।'); return; }
     if (isNaN(parseFloat(quantity))) { Alert.alert('गलत मात्रा', 'सही संख्या दर्ज करें।'); return; }
 
-    // Duplicate check (exclude current ticket)
     const dup = await checkDuplicate(name, date, editTicket.id);
     if (dup) {
       Alert.alert('डुप्लीकेट', `"${name}" का ${date} को रिकॉर्ड पहले से मौजूद है।`); return;
     }
 
     await updateTicket(editTicket.id, {
+      farmer_code: farmer_code.trim(),
       name: name.trim(),
       fatherName: fatherName.trim(),
+      caneOwner: caneOwner.trim(),
       date: date.trim(),
       quantity: parseFloat(quantity),
       comment: comment.trim(),
@@ -221,8 +272,10 @@ export default function DashboardScreen(): React.ReactElement {
   const shareOnWhatsApp = (ticket: Ticket) => {
     const msg =
       `🌾 *गन्ना टिकट / Cane Ticket*\n` +
+      `🆔 किसान कोड: ${ticket.farmer_code}\n` +
       `👤 नाम: ${ticket.name}\n` +
       `👨 पिता: ${ticket.fatherName}\n` +
+      `🌿 गन्ना मालिक: ${ticket.caneOwner}\n` +
       `📅 तारीख: ${ticket.date}\n` +
       `⚖️ मात्रा: ${parseFloat(String(ticket.quantity)).toFixed(2)} क्विंटल` +
       (ticket.comment ? `\n📝 टिप्पणी: ${ticket.comment}` : '') +
@@ -233,10 +286,9 @@ export default function DashboardScreen(): React.ReactElement {
       if (supported) {
         Linking.openURL(url);
       } else {
-        // Fallback to system share
         Share.share({ message: msg });
       }
-    });
+    }).catch(() => Share.share({ message: msg }));
   };
 
   // ── Ticket card ───────────────────────────────────────────────────────────
@@ -249,6 +301,7 @@ export default function DashboardScreen(): React.ReactElement {
         <View style={styles.ticketInfo}>
           <Text style={styles.ticketName} numberOfLines={1}>{item.name}</Text>
           <Text style={styles.ticketFather} numberOfLines={1}>पिता: {item.fatherName}</Text>
+          <Text style={styles.ticketCode} numberOfLines={1}>कोड: {item.farmer_code}</Text>
         </View>
         <View style={styles.ticketActions}>
           <TouchableOpacity onPress={() => shareOnWhatsApp(item)} style={styles.actionBtn}>
@@ -272,6 +325,12 @@ export default function DashboardScreen(): React.ReactElement {
           <Ionicons name="layers-outline" size={12} color="#06b6d4" />
           <Text style={styles.badgeQtyText}>{parseFloat(String(item.quantity)).toFixed(2)} क्विंटल</Text>
         </View>
+        {item.caneOwner !== 'मेरा गन्ना' && (
+          <View style={styles.badgeOwner}>
+            <Ionicons name="leaf-outline" size={10} color="#2ecc71" />
+            <Text style={styles.badgeOwnerText} numberOfLines={1}>{item.caneOwner}</Text>
+          </View>
+        )}
         {item.updatedAt && (
           <View style={styles.badgeEdited}>
             <Ionicons name="pencil" size={10} color="#8b5cf6" />
@@ -287,20 +346,20 @@ export default function DashboardScreen(): React.ReactElement {
         </View>
       )}
 
-      <Text style={styles.ticketTime}>Added: {formatDateTime(item.createdAt)}</Text>
+      <Text style={styles.ticketTime}>जोड़ा: {formatDateTime(item.createdAt)}</Text>
     </View>
   );
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <View style={styles.safe}>
+    <View style={[styles.safe, { paddingTop: insets.top || 20 }]}>
       <View style={styles.container}>
         {/* Header section */}
         <View style={styles.header}>
           {/* Season selector row */}
           <View style={styles.seasonRow}>
             <Text style={styles.seasonRowLabel}>चालू सीजन:</Text>
-            <SeasonSelector /> {/* no props needed */}
+            <SeasonSelector />
           </View>
           {/* Stats */}
           <View style={styles.statsRow}>
@@ -323,7 +382,10 @@ export default function DashboardScreen(): React.ReactElement {
               <TextInput
                 style={styles.priceInput}
                 value={pricePerQty}
-                onChangeText={setPricePerQty}
+                onChangeText={(v) => {
+                  // Only allow valid numbers
+                  if (v === '' || /^\d*\.?\d*$/.test(v)) setPricePerQty(v);
+                }}
                 placeholder="₹/क्विं"
                 placeholderTextColor="#555"
                 keyboardType="numeric"
@@ -350,7 +412,7 @@ export default function DashboardScreen(): React.ReactElement {
               style={styles.searchInput}
               value={searchText}
               onChangeText={handleSearch}
-              placeholder={isSearchListening ? 'सुन रहा है...' : 'नाम खोजें / किसान कोड / Search...'}
+              placeholder={isSearchListening ? 'सुन रहा है...' : 'नाम / किसान कोड खोजें...'}
               placeholderTextColor={isSearchListening ? '#e74c3c' : '#555'}
               autoCorrect={false}
             />
@@ -367,7 +429,7 @@ export default function DashboardScreen(): React.ReactElement {
               </View>
             </Animated.View>
           </View>
-          <Text style={styles.holdHint}>📌 माइक दबाकर रखें / Hold mic to search</Text>
+          <Text style={styles.holdHint}>📌 माइक दबाकर रखें - बोलकर खोजें</Text>
 
           {/* Filters */}
           <View style={styles.filterRow}>
@@ -378,7 +440,7 @@ export default function DashboardScreen(): React.ReactElement {
               <Ionicons name="leaf-outline" size={13} color={selectedOwners.length > 0 ? '#2ecc71' : '#888'} />
               <Text style={[styles.filterChipText, selectedOwners.length > 0 && { color: '#2ecc71' }]} numberOfLines={1}>
                 {selectedOwners.length === 0
-                  ? 'मालिक / Owner'
+                  ? 'मालिक'
                   : selectedOwners.length === 1
                     ? selectedOwners[0]
                     : `${selectedOwners.length} मालिक`}
@@ -396,7 +458,7 @@ export default function DashboardScreen(): React.ReactElement {
                   ? 'नाम चुनें'
                   : selectedNames.length === 1
                     ? selectedNames[0]
-                    : `${selectedNames.length} नाम चुने`}
+                    : `${selectedNames.length} नाम`}
               </Text>
               <Ionicons name="chevron-down" size={12} color={selectedNames.length > 0 ? '#f0a500' : '#888'} />
             </TouchableOpacity>
@@ -412,7 +474,7 @@ export default function DashboardScreen(): React.ReactElement {
             {hasFilters ? (
               <TouchableOpacity style={styles.clearChip} onPress={clearFilters}>
                 <Ionicons name="close" size={13} color="#e74c3c" />
-                <Text style={styles.clearChipText}>Clear</Text>
+                <Text style={styles.clearChipText}>साफ़ करें</Text>
               </TouchableOpacity>
             ) : null}
           </View>
@@ -420,8 +482,15 @@ export default function DashboardScreen(): React.ReactElement {
           {showDateInput && (
             <View style={styles.dateInputRow}>
               <Ionicons name="calendar" size={15} color="#f0a500" />
-              <TextInput style={styles.dateInput} value={filterDate} onChangeText={handleDateFilter}
-                placeholder="e.g. 2024 or 03/2024" placeholderTextColor="#555" keyboardType="numeric" autoFocus />
+              <TextInput
+                style={styles.dateInput}
+                value={filterDate}
+                onChangeText={handleDateFilter}
+                placeholder="जैसे: 2024 या 03/2024 या 15"
+                placeholderTextColor="#555"
+                keyboardType="default"
+                autoFocus
+              />
               {filterDate ? (
                 <TouchableOpacity onPress={() => { handleDateFilter(''); setShowDateInput(false); }}>
                   <Ionicons name="close-circle" size={16} color="#888" />
@@ -433,7 +502,7 @@ export default function DashboardScreen(): React.ReactElement {
           {selectedNames && selectedNames.length > 0 && (
             <View style={styles.activeTag}>
               <Text style={styles.activeTagText}>
-                दिखा रहे:{" "}
+                दिखा रहे:{' '}
                 {selectedNames.map((name, index) => (
                   <Text key={index} style={{ color: '#f0a500', fontWeight: '700' }}>
                     {name}
@@ -445,7 +514,7 @@ export default function DashboardScreen(): React.ReactElement {
           )}
 
           <Text style={styles.resultsLabel}>
-            {filtered.length} रिकॉर्ड / Record{filtered.length !== 1 ? 's' : ''}
+            {filtered.length} रिकॉर्ड
           </Text>
         </View>
 
@@ -475,7 +544,7 @@ export default function DashboardScreen(): React.ReactElement {
         <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setShowNamesModal(false)}>
           <View style={styles.namesSheet}>
             <View style={styles.namesHeader}>
-              <Text style={styles.namesTitle}>👤 नाम चुनें / Select Name</Text>
+              <Text style={styles.namesTitle}>👤 नाम चुनें</Text>
               <TouchableOpacity onPress={() => setShowNamesModal(false)}>
                 <Ionicons name="close" size={22} color="#888" />
               </TouchableOpacity>
@@ -486,7 +555,7 @@ export default function DashboardScreen(): React.ReactElement {
                 onPress={() => handleSelectName(null)}
               >
                 <Text style={[styles.nameItemText, selectedNames.length === 0 && { color: '#f0a500' }]}>
-                  All / सभी नाम
+                  सभी नाम
                 </Text>
                 {selectedNames.length === 0 && <Ionicons name="checkmark" size={16} color="#f0a500" />}
               </TouchableOpacity>
@@ -505,7 +574,7 @@ export default function DashboardScreen(): React.ReactElement {
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={[styles.nameItemText, selectedNames.includes(name) && { color: '#f0a500' }]}>{name}</Text>
-                      <Text style={styles.nameItemSub}>{count} tickets · {qty.toFixed(2)} क्विंटल</Text>
+                      <Text style={styles.nameItemSub}>{count} टिकट · {qty.toFixed(2)} क्विंटल</Text>
                     </View>
                     <View style={[styles.checkbox, selectedNames.includes(name) && styles.checkboxOn]}>
                       {selectedNames.includes(name) && <Ionicons name="checkmark" size={12} color="#fff" />}
@@ -523,20 +592,19 @@ export default function DashboardScreen(): React.ReactElement {
         <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setShowOwnerModal(false)}>
           <View style={styles.namesSheet}>
             <View style={styles.namesHeader}>
-              <Text style={styles.namesTitle}>🌾 मालिक चुनें / Select Owner</Text>
+              <Text style={styles.namesTitle}>🌾 मालिक चुनें</Text>
               <TouchableOpacity onPress={() => setShowOwnerModal(false)}>
                 <Ionicons name="close" size={22} color="#888" />
               </TouchableOpacity>
             </View>
 
             <ScrollView>
-              {/* All option */}
               <TouchableOpacity
                 style={[styles.nameItem, selectedOwners.length === 0 && styles.nameItemOn]}
                 onPress={() => handleSelectOwner(null)}
               >
                 <Text style={[styles.nameItemText, selectedOwners.length === 0 && { color: '#2ecc71' }]}>
-                  All / सभी मालिक
+                  सभी मालिक
                 </Text>
                 {selectedOwners.length === 0 && <Ionicons name="checkmark" size={16} color="#2ecc71" />}
               </TouchableOpacity>
@@ -560,7 +628,7 @@ export default function DashboardScreen(): React.ReactElement {
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={[styles.nameItemText, isSelected && { color: '#2ecc71' }]}>{owner}</Text>
-                      <Text style={styles.nameItemSub}>{count} tickets · {qty.toFixed(2)} क्विंटल</Text>
+                      <Text style={styles.nameItemSub}>{count} टिकट · {qty.toFixed(2)} क्विंटल</Text>
                     </View>
                     <View style={[styles.checkbox, isSelected && { backgroundColor: '#2ecc71', borderColor: '#2ecc71' }]}>
                       {isSelected && <Ionicons name="checkmark" size={12} color="#fff" />}
@@ -570,7 +638,6 @@ export default function DashboardScreen(): React.ReactElement {
               })}
             </ScrollView>
 
-            {/* Done button */}
             <TouchableOpacity
               style={[styles.doneBtn, { backgroundColor: '#2ecc71' }]}
               onPress={() => setShowOwnerModal(false)}
@@ -585,50 +652,64 @@ export default function DashboardScreen(): React.ReactElement {
 
       {/* ── Edit Modal ── */}
       <Modal visible={!!editTicket} transparent animationType="slide">
-        <View style={styles.editOverlay}>
-          <View style={styles.editSheet}>
-            <View style={styles.namesHeader}>
-              <Text style={styles.namesTitle}>✏️ रिकॉर्ड संपादित करें</Text>
-              <TouchableOpacity onPress={() => setEditTicket(null)}>
-                <Ionicons name="close" size={22} color="#888" />
-              </TouchableOpacity>
-            </View>
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
+          <View style={styles.editOverlay}>
+            <View style={styles.editSheet}>
+              <View style={styles.namesHeader}>
+                <Text style={styles.namesTitle}>✏️ रिकॉर्ड संपादित करें</Text>
+                <TouchableOpacity onPress={() => setEditTicket(null)}>
+                  <Ionicons name="close" size={22} color="#888" />
+                </TouchableOpacity>
+              </View>
 
-            <ScrollView showsVerticalScrollIndicator={false}>
-              {[
-                { label: 'नाम / Name', field: 'name' as const, kb: 'default' as const },
-                { label: 'पिता का नाम / Father Name', field: 'fatherName' as const, kb: 'default' as const },
-                { label: 'तारीख / Date (DD/MM/YYYY)', field: 'date' as const, kb: 'numeric' as const },
-                { label: 'मात्रा / Quantity', field: 'quantity' as const, kb: 'numeric' as const },
-                { label: 'टिप्पणी / Comment', field: 'comment' as const, kb: 'default' as const },
-              ].map(({ label, field, kb }) => (
-                <View key={field} style={styles.editField}>
-                  <Text style={styles.editLabel}>{label}</Text>
-                  <TextInput
-                    style={[styles.editInput, field === 'comment' && { height: 80, textAlignVertical: 'top' }]}
-                    value={editForm[field]}
-                    onChangeText={val => setEditForm(prev => ({ ...prev, [field]: val }))}
-                    keyboardType={kb}
-                    multiline={field === 'comment'}
-                    autoCorrect={false}
-                    placeholderTextColor="#555"
-                  />
-                </View>
-              ))}
-            </ScrollView>
+              <ScrollView showsVerticalScrollIndicator={false}>
+                {[
+                  { label: 'किसान कोड / Farmer Code', field: 'farmer_code' as const, kb: 'default' as const },
+                  { label: 'नाम / Name', field: 'name' as const, kb: 'default' as const },
+                  { label: 'पिता का नाम / Father Name', field: 'fatherName' as const, kb: 'default' as const },
+                  { label: 'गन्ना मालिक / Cane Owner', field: 'caneOwner' as const, kb: 'default' as const },
+                  { label: 'तारीख / Date (DD/MM/YYYY)', field: 'date' as const, kb: 'numeric' as const },
+                  { label: 'मात्रा / Quantity', field: 'quantity' as const, kb: 'numeric' as const },
+                  { label: 'टिप्पणी / Comment', field: 'comment' as const, kb: 'default' as const },
+                ].map(({ label, field, kb }) => (
+                  <View key={field} style={styles.editField}>
+                    <Text style={styles.editLabel}>{label}</Text>
+                    <TextInput
+                      style={[styles.editInput, field === 'comment' && { height: 80, textAlignVertical: 'top' }]}
+                      value={editForm[field]}
+                      onChangeText={val => {
+                        if (field === 'date') {
+                          setEditForm(prev => ({ ...prev, [field]: formatDateInput(val) }));
+                        } else {
+                          setEditForm(prev => ({ ...prev, [field]: val }));
+                        }
+                      }}
+                      keyboardType={kb}
+                      multiline={field === 'comment'}
+                      autoCorrect={false}
+                      placeholderTextColor="#555"
+                      maxLength={field === 'date' ? 10 : undefined}
+                    />
+                  </View>
+                ))}
+              </ScrollView>
 
-            <View style={styles.editBtns}>
-              <TouchableOpacity style={[styles.editBtn, { backgroundColor: '#2d2d4e' }]}
-                onPress={() => setEditTicket(null)}>
-                <Text style={styles.editBtnText}>रद्द करें</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.editBtn, { backgroundColor: '#f0a500' }]}
-                onPress={handleEditSave}>
-                <Text style={[styles.editBtnText, { color: '#1a1a2e' }]}>सहेजें ✓</Text>
-              </TouchableOpacity>
+              <View style={styles.editBtns}>
+                <TouchableOpacity style={[styles.editBtn, { backgroundColor: '#2d2d4e' }]}
+                  onPress={() => setEditTicket(null)}>
+                  <Text style={styles.editBtnText}>रद्द करें</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.editBtn, { backgroundColor: '#f0a500' }]}
+                  onPress={handleEditSave}>
+                  <Text style={[styles.editBtnText, { color: '#1a1a2e' }]}>सहेजें ✓</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
     </View>
@@ -638,7 +719,7 @@ export default function DashboardScreen(): React.ReactElement {
 // ─── Styles ──────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#0f0f1e', paddingTop:20 },
+  safe: { flex: 1, backgroundColor: '#0f0f1e' },
   container: { flex: 1 },
   header: { padding: 14, paddingBottom: 0 },
   listContent: { padding: 14, paddingBottom: 5 },
@@ -680,6 +761,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     borderWidth: 1,
     borderColor: 'rgba(240,165,0,0.3)',
+    flex: 2,
   },
   totalAmountLeft: { flex: 1 },
   totalAmountLabel: { color: '#f0a500', fontSize: 13, fontWeight: '700' },
@@ -714,6 +796,7 @@ const styles = StyleSheet.create({
   ticketInfo: { flex: 1 },
   ticketName: { color: '#f0f0f0', fontSize: 15, fontWeight: '700' },
   ticketFather: { color: '#888', fontSize: 11, marginTop: 2 },
+  ticketCode: { color: '#555', fontSize: 10, marginTop: 1 },
   ticketActions: { flexDirection: 'row', gap: 4 },
   actionBtn: { padding: 6 },
 
@@ -722,6 +805,8 @@ const styles = StyleSheet.create({
   badgeDateText: { color: '#f0a500', fontSize: 11, fontWeight: '700' },
   badgeQty: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(6,182,212,0.1)', borderRadius: 6, paddingVertical: 4, paddingHorizontal: 8, borderWidth: 1, borderColor: 'rgba(6,182,212,0.25)' },
   badgeQtyText: { color: '#06b6d4', fontSize: 11, fontWeight: '700' },
+  badgeOwner: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(46,204,113,0.1)', borderRadius: 6, paddingVertical: 4, paddingHorizontal: 8, borderWidth: 1, borderColor: 'rgba(46,204,113,0.25)', maxWidth: 120 },
+  badgeOwnerText: { color: '#2ecc71', fontSize: 10, fontWeight: '700' },
   badgeEdited: { flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: 'rgba(139,92,246,0.1)', borderRadius: 6, paddingVertical: 4, paddingHorizontal: 8, borderWidth: 1, borderColor: 'rgba(139,92,246,0.25)' },
   badgeEditedText: { color: '#8b5cf6', fontSize: 10, fontWeight: '700' },
 
@@ -745,7 +830,7 @@ const styles = StyleSheet.create({
   nameItemSub: { color: '#555', fontSize: 10, marginTop: 1 },
 
   editOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'flex-end' },
-  editSheet: { backgroundColor: '#1a1a2e', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, maxHeight: '90%', borderTopWidth: 1, borderColor: '#2d2d4e' },
+  editSheet: { backgroundColor: '#1a1a2e', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, maxHeight: '92%', borderTopWidth: 1, borderColor: '#2d2d4e' },
   editField: { marginBottom: 14 },
   editLabel: { color: '#888', fontSize: 12, fontWeight: '600', marginBottom: 6 },
   editInput: { backgroundColor: '#0f0f1e', borderRadius: 10, padding: 12, color: '#f0f0f0', fontSize: 15, borderWidth: 1.5, borderColor: '#2d2d4e' },

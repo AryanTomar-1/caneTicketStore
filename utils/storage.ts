@@ -151,30 +151,28 @@ export const getSeasonStats = async (seasonId: string) => {
   };
 };
 
-// ─── Auto cleanup on 1st October ─────────────────────────────────────────────
+// ─── Auto cleanup: remove season data older than 4 years ─────────────────────
 
 export const cleanupOldSeasons = async (): Promise<void> => {
   try {
-    const now = new Date();
-    const day = now.getDate();
-    const month = now.getMonth() + 1;
+    const currentStart = getCurrentStartYear();
+    const oldestAllowedStart = currentStart - 3; // keep 4 seasons: current + 3 previous
 
-    // Only run on 1st October
-    if (day !== 12 || month !== 4) return;
+    const allKeys = await AsyncStorage.getAllKeys();
+    const seasonPrefix = 'cane_tickets_';
 
-    const delYear = getCurrentStartYear() - 4;
-    const season = makeSeasonId(delYear);
-    const key = seasonKey(season);
+    const keysToDelete = allKeys.filter(key => {
+      if (!key.startsWith(seasonPrefix)) return false;
+      const id = key.slice(seasonPrefix.length); // e.g. "2020-2021"
+      const parts = id.split('-');
+      if (parts.length !== 2) return false;
+      const startYear = parseInt(parts[0], 10);
+      return !isNaN(startYear) && startYear < oldestAllowedStart;
+    });
 
-    const value = await AsyncStorage.getItem(key);
-
-    if (value !== null) {
-      await AsyncStorage.removeItem(key);
-    } else {
-      console.log("Key does NOT exist");
+    if (keysToDelete.length > 0) {
+      await AsyncStorage.multiRemove(keysToDelete);
     }
-
-
   } catch (err) {
     console.error('Cleanup error:', err);
   }
