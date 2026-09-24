@@ -28,6 +28,30 @@ export const todayFormatted = (): string => {
   return `${dd}/${mm}/${yyyy}`;
 };
 
+/** Return yesterday's date as DD/MM/YYYY */
+export const yesterdayFormatted = (): string => {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const yyyy = d.getFullYear();
+  return `${dd}/${mm}/${yyyy}`;
+};
+
+/**
+ * Compare two DD/MM/YYYY dates.
+ * Returns negative if a < b, 0 if equal, positive if a > b.
+ */
+export const compareDDMMYYYY = (a: string, b: string): number => {
+  const toTimestamp = (s: string) => {
+    const parts = s.split('/');
+    if (parts.length !== 3) return 0;
+    const [dd, mm, yyyy] = parts.map(Number);
+    return new Date(yyyy, mm - 1, dd).getTime();
+  };
+  return toTimestamp(a) - toTimestamp(b);
+};
+
 /**
  * Sanitize free-form date search strings (e.g. "2024", "03/2024", "15/03")
  * WITHOUT forcing the DD/MM/YYYY format. Used by the Dashboard date filter only.
