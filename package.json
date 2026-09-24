@@ -11,7 +11,9 @@
     "lint": "expo lint",
     "update": "eas update --branch production",
     "update:preview": "eas update --branch preview",
-    "update:check": "eas update:list --branch production --limit 5"
+    "update:check": "eas update:list --branch production --limit 5",
+    "build:apk": "eas build --platform android --profile preview",
+    "build:prod-apk": "eas build --platform android --profile production-apk"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
