@@ -9,7 +9,12 @@ import {Season} from '../types';
 import { getSeasonStats } from '../utils/storage';
 import { useSeason } from '../context/SeasonContext';
 
-export default function SeasonSelector() {
+interface SeasonSelectorProps {
+  prefix?: string;
+  showIcon?: boolean;
+}
+
+export default function SeasonSelector({ prefix = '', showIcon = true }: SeasonSelectorProps) {
   const { selectedSeason, isCurrentSeason, changeSeason, resetSeason } = useSeason();
 
   const [showModal, setShowModal] = useState(false);
@@ -48,9 +53,9 @@ export default function SeasonSelector() {
 
   return (
     <>
-      <TouchableOpacity style={styles.chip} onPress={openModal}>
-        <Ionicons name="leaf-outline" size={13} color="#2ecc71" />
-        <Text style={styles.chipText}>{displayId}</Text>
+      <TouchableOpacity style={styles.chip} onPress={openModal} activeOpacity={0.7}>
+        {showIcon && <Ionicons name="leaf-outline" size={13} color="#2ecc71" />}
+        <Text style={styles.chipText}>{prefix}{displayId}</Text>
         {!isCurrentSeason && (
           <View style={styles.prevBadge}>
             <Text style={styles.prevBadgeText}>पुराना</Text>

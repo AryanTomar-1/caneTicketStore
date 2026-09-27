@@ -7,6 +7,7 @@ import { Ticket, TicketInput, Season, RecentFarmer, MillPaymentSettings, BackupP
 const seasonKey = (seasonId: string) => `cane_tickets_${seasonId}`;
 const RECENT_FARMERS_KEY = 'cane_recent_farmers';
 const millPaymentKey = (seasonId: string) => `cane_mill_payment_${seasonId}`;
+const caneRateKey = (seasonId: string) => `cane_rate_${seasonId}`;
 
 // ─── ID generator ─────────────────────────────────────────────────────────────
 
@@ -258,6 +259,27 @@ export const setMillPaymentSettings = async (
 /** Remove the mill payment date for a season */
 export const clearMillPaymentSettings = async (seasonId: string): Promise<void> => {
   await AsyncStorage.removeItem(millPaymentKey(seasonId));
+};
+
+// ─── Cane Rate ───────────────────────────────────────────────────────────────
+
+/** Get the configured cane rate for a season */
+export const getCaneRate = async (seasonId: string): Promise<string> => {
+  try {
+    const raw = await AsyncStorage.getItem(caneRateKey(seasonId));
+    return raw || '';
+  } catch { return ''; }
+};
+
+/** Persist the configured cane rate for a season */
+export const setCaneRate = async (seasonId: string, rate: string): Promise<void> => {
+  try {
+    if (!rate || !rate.trim()) {
+      await AsyncStorage.removeItem(caneRateKey(seasonId));
+    } else {
+      await AsyncStorage.setItem(caneRateKey(seasonId), rate.trim());
+    }
+  } catch { /* silent */ }
 };
 
 // ─── Backup & Restore ─────────────────────────────────────────────────────────
