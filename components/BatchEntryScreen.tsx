@@ -24,19 +24,17 @@ import { formatDateInput, isValidDate, todayFormatted, yesterdayFormatted } from
 import { BatchSlipItem, RecentFarmer, Ticket } from '../types';
 import { useSeason } from '../context/SeasonContext';
 
-// ─── Unique ID helper for temp list keys ──────────────────────────────────────
+// Unique ID helper for staged slips
 const localId = () => Math.random().toString(36).slice(2);
 
-// ─── Props ────────────────────────────────────────────────────────────────────
 interface BatchEntryProps {
   onSaved: () => void;
 }
 
-// ─── Component ────────────────────────────────────────────────────────────────
 export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
   const { selectedSeason } = useSeason();
 
-  // ── Farmer Master ──────────────────────────────────────────────────────────
+  // ── Farmer Master (Entered ONCE for the batch) ─────────────────────────────
   const [farmerCode, setFarmerCode] = useState('');
   const [farmerName, setFarmerName] = useState('');
   const [fatherName, setFatherName] = useState('');
@@ -47,17 +45,17 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
   // ── Recent farmers ────────────────────────────────────────────────────────
   const [recentFarmers, setRecentFarmers] = useState<RecentFarmer[]>([]);
 
-  // ── Slip sub-form ─────────────────────────────────────────────────────────
+  // ── Slip Sub-Form (Added multiple times) ───────────────────────────────────
   const [slipDate, setSlipDate] = useState(todayFormatted());
-  const [ownerType, setOwnerType] = useState<'self' | 'other' | null>(null);
+  const [ownerType, setOwnerType] = useState<'self' | 'other' | null>('self');
   const [ownerName, setOwnerName] = useState('');
   const [quantity, setQuantity] = useState('');
   const [comment, setComment] = useState('');
 
-  // ── Staged slips ──────────────────────────────────────────────────────────
+  // ── Staged Slips List ─────────────────────────────────────────────────────
   const [stagedSlips, setStagedSlips] = useState<BatchSlipItem[]>([]);
 
-  // ── Loading ───────────────────────────────────────────────────────────────
+  // ── Loading & Success ─────────────────────────────────────────────────────
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
 
@@ -65,17 +63,16 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
   const fatherRef = useRef<TextInput>(null);
   const qtyRef = useRef<TextInput>(null);
 
-  // Load recent farmers on mount
   useEffect(() => {
     loadRecentFarmers();
   }, []);
 
   const loadRecentFarmers = async () => {
-    const recent = await getRecentFarmers(5);
+    const recent = await getRecentFarmers(6);
     setRecentFarmers(recent);
   };
 
-  // ── Auto-lookup farmer by code ────────────────────────────────────────────
+  // ── Auto-lookup farmer by code on blur ─────────────────────────────────────
   const handleCodeBlur = useCallback(async () => {
     const code = farmerCode.trim();
     if (!code || farmerLookupDone) return;
@@ -92,7 +89,6 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
           setFatherName(found.fatherName);
           await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         }
-        // If multiple names for same code, leave blank for manual entry
       }
     } catch {
       // Silently ignore — user can fill manually
@@ -102,6 +98,7 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
     }
   }, [farmerCode, farmerLookupDone]);
 
+  // ── Apply recent farmer to master fields ──────────────────────────────────
   const applyRecentFarmer = (farmer: RecentFarmer) => {
     setFarmerCode(farmer.farmer_code);
     setFarmerName(farmer.name);
@@ -109,6 +106,7 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
     setFarmerLookupDone(true);
     setFarmerError('');
     Haptics.selectionAsync();
+    qtyRef.current?.focus();
   };
 
   // ── Validate farmer master fields ─────────────────────────────────────────
@@ -118,7 +116,7 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
       return false;
     }
     if (!farmerName.trim()) {
-      setFarmerError('नाम आवश्यक है।');
+      setFarmerError('किसान का नाम आवश्यक है।');
       return false;
     }
     if (!fatherName.trim()) {
@@ -129,7 +127,7 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
     return true;
   };
 
-  // ── Date helpers ──────────────────────────────────────────────────────────
+  // ── Date input & validation ───────────────────────────────────────────────
   const handleDateChange = (text: string) => {
     if (text.length < slipDate.length) {
       const stripped = text.endsWith('/') ? text.slice(0, -1) : text;
@@ -143,43 +141,54 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
     if (!isValidDate(date)) return 'कृपया सही तारीख दर्ज करें (DD/MM/YYYY)।';
     const [, m, y] = date.split('/');
     const yearParts = selectedSeason.split('-');
-    if (yearParts[0] !== y && yearParts[1] !== y)
-      return `यह तारीख (${date}) इस सीजन के लिए नहीं है।`;
-    if (yearParts[0] === y && parseInt(m, 10) < 10)
+    if (yearParts[0] !== y && yearParts[1] !== y) {
+      return `यह तारीख (${date}) वर्तमान सीजन (${selectedSeason}) के लिए मान्य नहीं है।`;
+    }
+    if (yearParts[0] === y && parseInt(m, 10) < 10) {
       return `यह महीना (${m}) इस सीजन से पहले का है।`;
-    if (yearParts[1] === y && parseInt(m, 10) >= 10)
+    }
+    if (yearParts[1] === y && parseInt(m, 10) >= 10) {
       return `यह महीना (${m}) अगले सीजन में आता है।`;
+    }
     return null;
   };
 
-  // ── Add slip to staged list ───────────────────────────────────────────────
+  // ── Add Slip to Staged List ───────────────────────────────────────────────
   const handleAddSlip = async () => {
     if (!validateFarmer()) return;
 
     // Validate date
     const dateErr = validateDateForSeason(slipDate);
-    if (dateErr) { Alert.alert('तारीख त्रुटि', dateErr); return; }
+    if (dateErr) {
+      Alert.alert('तारीख त्रुटि', dateErr);
+      return;
+    }
 
     // Validate owner
     const caneOwner = ownerType === 'self' ? 'मेरा गन्ना' : ownerName.trim();
-    if (!ownerType) { Alert.alert('मालिक चुनें', 'कृपया गन्ना मालिक का विकल्प चुनें।'); return; }
+    if (!ownerType) {
+      Alert.alert('मालिक चुनें', 'कृपया गन्ना मालिक का विकल्प चुनें।');
+      return;
+    }
     if (ownerType === 'other' && !ownerName.trim()) {
-      Alert.alert('मालिक का नाम', 'कृपया मालिक का नाम दर्ज करें।'); return;
+      Alert.alert('मालिक का नाम', 'कृपया मालिक का नाम दर्ज करें।');
+      return;
     }
 
     // Validate quantity
     const qty = parseFloat(quantity);
     if (!quantity.trim() || isNaN(qty) || qty <= 0) {
-      Alert.alert('मात्रा त्रुटि', 'कृपया सही मात्रा दर्ज करें (0 से अधिक)।'); return;
+      Alert.alert('मात्रा त्रुटि', 'कृपया सही मात्रा दर्ज करें (0 से अधिक संख्या)।');
+      return;
     }
 
-    // Soft duplicate check
+    // Duplicate check
     const dup = await checkDuplicate(farmerName.trim(), slipDate);
     const alreadyInBatch = stagedSlips.some(
       s => s.date === slipDate && s.caneOwner === caneOwner
     );
 
-    const addSlip = () => {
+    const addSlipItem = () => {
       setStagedSlips(prev => [
         ...prev,
         {
@@ -190,9 +199,9 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
           comment: comment.trim(),
         },
       ]);
-      // Reset slip sub-form (keep farmer fields)
+      // Reset only the slip sub-form (Keep farmer master intact!)
       setSlipDate(todayFormatted());
-      setOwnerType(null);
+      setOwnerType('self');
       setOwnerName('');
       setQuantity('');
       setComment('');
@@ -204,12 +213,12 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
       const why = dup
         ? `"${farmerName.trim()}" का ${slipDate} को रिकॉर्ड पहले से मौजूद है।`
         : `इस बैच में ${slipDate} की पर्ची पहले से है।`;
-      Alert.alert('डुप्लीकेट पर्ची?', `${why}\nफिर भी जोड़ें?`, [
+      Alert.alert('डुप्लीकेट पर्ची?', `${why}\nक्या फिर भी जोड़ना चाहते हैं?`, [
         { text: 'रद्द करें', style: 'cancel' },
-        { text: 'जोड़ें', onPress: addSlip },
+        { text: 'जोड़ें', onPress: addSlipItem },
       ]);
     } else {
-      addSlip();
+      addSlipItem();
     }
   };
 
@@ -218,21 +227,21 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
   };
 
-  // ── Submit all staged slips ───────────────────────────────────────────────
+  // ── Submit All Staged Slips ───────────────────────────────────────────────
   const handleSubmitAll = async () => {
     if (!validateFarmer()) return;
     if (stagedSlips.length === 0) {
-      Alert.alert('पर्ची नहीं', 'पहले कम से कम एक पर्ची जोड़ें।'); return;
+      Alert.alert('कोई पर्ची नहीं', 'पहले कम से कम एक पर्ची जोड़ें।');
+      return;
     }
 
     Alert.alert(
       'सभी पर्चियां सेव करें?',
-      `${stagedSlips.length} पर्चियां\n${farmerName.trim()} (कोड: ${farmerCode.trim()}) के लिए सेव होंगी।`,
+      `${farmerName.trim()} (कोड: ${farmerCode.trim()}) के लिए कुल ${stagedSlips.length} पर्चियां (${totalQty.toFixed(1)} क्विंटल) सेव की जाएंगी।`,
       [
         { text: 'रद्द करें', style: 'cancel' },
         {
-          text: `${stagedSlips.length} पर्चियां सेव करें`,
-          style: 'default',
+          text: `हाँ, ${stagedSlips.length} पर्चियां सेव करें`,
           onPress: performSubmit,
         },
       ]
@@ -256,7 +265,7 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
 
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setSavedSuccess(true);
-      // Reset everything
+      // Reset all form state
       setFarmerCode('');
       setFarmerName('');
       setFatherName('');
@@ -264,12 +273,15 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
       setFarmerError('');
       setStagedSlips([]);
       setSlipDate(todayFormatted());
-      setOwnerType(null);
+      setOwnerType('self');
       setOwnerName('');
       setQuantity('');
       setComment('');
       await loadRecentFarmers();
-      setTimeout(() => { setSavedSuccess(false); onSaved(); }, 2000);
+      setTimeout(() => {
+        setSavedSuccess(false);
+        onSaved();
+      }, 2000);
     } catch (e: any) {
       const msg = e instanceof Error ? e.message : 'सेव करने में समस्या। पुनः प्रयास करें।';
       Alert.alert('त्रुटि', msg);
@@ -278,19 +290,15 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
     }
   };
 
-  // ── Running totals ────────────────────────────────────────────────────────
   const totalQty = stagedSlips.reduce((s, slip) => s + (parseFloat(slip.quantity) || 0), 0);
 
-  // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <View style={{ flex: 1 }}>
     <KeyboardAvoidingView
       style={{ flex: 1 }}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 80 : 0}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <ScrollView
-        style={styles.scroll}
+        style={styles.container}
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
@@ -299,15 +307,15 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
         {savedSuccess && (
           <View style={styles.successBanner}>
             <Ionicons name="checkmark-circle" size={20} color="#fff" />
-            <Text style={styles.successText}>✅ सभी पर्चियां सफलतापूर्वक सेव हुईं!</Text>
+            <Text style={styles.successText}>✅ सभी पर्चियां सफलतापूर्वक सेव हो गईं!</Text>
           </View>
         )}
 
-        {/* ── Recent Farmers ── */}
+        {/* ── 1. Recent Farmers (Quick Autofill Master) ── */}
         {recentFarmers.length > 0 && (
           <View style={styles.recentBox}>
             <Text style={styles.recentTitle}>
-              <Ionicons name="time-outline" size={12} color="#f0a500" /> हाल के किसान
+              <Ionicons name="time-outline" size={12} color="#f0a500" /> हाल के किसान — टैप करके चुनें:
             </Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.recentScroll}>
               {recentFarmers.map(f => (
@@ -315,7 +323,7 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
                   key={f.farmer_code}
                   style={styles.recentChip}
                   onPress={() => applyRecentFarmer(f)}
-                  activeOpacity={0.75}
+                  activeOpacity={0.7}
                 >
                   <Text style={styles.recentChipCode}>{f.farmer_code}</Text>
                   <Text style={styles.recentChipName} numberOfLines={1}>{f.name}</Text>
@@ -325,370 +333,649 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
           </View>
         )}
 
-        {/* ── Farmer Master Box ── */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>
-            <Ionicons name="person-outline" size={14} color="#f0a500" /> किसान जानकारी (एक बार भरें)
-          </Text>
-
-          <Text style={styles.label}>किसान कोड / Farmer Code</Text>
-          <TextInput
-            style={styles.input}
-            value={farmerCode}
-            onChangeText={v => { setFarmerCode(v); setFarmerLookupDone(false); setFarmerError(''); }}
-            placeholder="किसान कोड"
-            placeholderTextColor="#555"
-            autoCorrect={false}
-            returnKeyType="next"
-            onSubmitEditing={() => nameRef.current?.focus()}
-            onBlur={handleCodeBlur}
-          />
-          {isLookingUp && (
-            <View style={styles.lookupRow}>
-              <ActivityIndicator size="small" color="#f0a500" />
-              <Text style={styles.lookupText}>डेटाबेस में खोज रहे हैं...</Text>
+        {/* ── 2. Farmer Master Section (ENTERED ONCE) ── */}
+        <View style={styles.sectionCard}>
+          <View style={styles.sectionHeaderRow}>
+            <View style={styles.sectionHeaderLeft}>
+              <View style={[styles.sectionIconCircle, { backgroundColor: 'rgba(240,165,0,0.12)' }]}>
+                <Ionicons name="person" size={16} color="#f0a500" />
+              </View>
+              <Text style={styles.sectionTitle}>किसान जानकारी (एक बार भरें)</Text>
             </View>
-          )}
+            {farmerName && fatherName ? (
+              <View style={styles.checkedPill}>
+                <Ionicons name="checkmark-circle" size={12} color="#22c55e" />
+                <Text style={styles.checkedPillText}>तय है</Text>
+              </View>
+            ) : null}
+          </View>
 
-          <Text style={styles.label}>नाम / Name</Text>
-          <TextInput
-            ref={nameRef}
-            style={styles.input}
-            value={farmerName}
-            onChangeText={v => { setFarmerName(v); setFarmerError(''); }}
-            placeholder="किसान का नाम"
-            placeholderTextColor="#555"
-            autoCorrect={false}
-            returnKeyType="next"
-            onSubmitEditing={() => fatherRef.current?.focus()}
-          />
+          {/* Code & Name Row */}
+          <View style={styles.rowDouble}>
+            <View style={{ flex: 1.1 }}>
+              <Text style={styles.fieldLabel}>किसान कोड / Code</Text>
+              <TextInput
+                style={styles.inputField}
+                value={farmerCode}
+                onChangeText={v => {
+                  setFarmerCode(v);
+                  setFarmerLookupDone(false);
+                  setFarmerError('');
+                }}
+                onBlur={handleCodeBlur}
+                placeholder="जैसे: 08"
+                placeholderTextColor="#475569"
+                keyboardType="default"
+                returnKeyType="next"
+                onSubmitEditing={() => nameRef.current?.focus()}
+              />
+              {isLookingUp && (
+                <View style={styles.lookupIndicator}>
+                  <ActivityIndicator size="small" color="#f0a500" />
+                  <Text style={styles.lookupText}>खोज रहे हैं...</Text>
+                </View>
+              )}
+            </View>
 
-          <Text style={styles.label}>पिता का नाम / Father Name</Text>
-          <TextInput
-            ref={fatherRef}
-            style={styles.input}
-            value={fatherName}
-            onChangeText={v => { setFatherName(v); setFarmerError(''); }}
-            placeholder="पिता का नाम"
-            placeholderTextColor="#555"
-            autoCorrect={false}
-            returnKeyType="done"
-          />
+            <View style={{ flex: 2 }}>
+              <Text style={styles.fieldLabel}>नाम / Name</Text>
+              <TextInput
+                ref={nameRef}
+                style={styles.inputField}
+                value={farmerName}
+                onChangeText={v => { setFarmerName(v); setFarmerError(''); }}
+                placeholder="किसान का नाम"
+                placeholderTextColor="#475569"
+                autoCorrect={false}
+                returnKeyType="next"
+                onSubmitEditing={() => fatherRef.current?.focus()}
+              />
+            </View>
+          </View>
+
+          {/* Father Name */}
+          <View style={{ marginTop: 8 }}>
+            <Text style={styles.fieldLabel}>पिता का नाम / Father Name</Text>
+            <TextInput
+              ref={fatherRef}
+              style={styles.inputField}
+              value={fatherName}
+              onChangeText={v => { setFatherName(v); setFarmerError(''); }}
+              placeholder="पिता का नाम"
+              placeholderTextColor="#475569"
+              autoCorrect={false}
+              returnKeyType="done"
+            />
+          </View>
 
           {!!farmerError && (
-            <View style={styles.errorRow}>
-              <Ionicons name="warning-outline" size={14} color="#e74c3c" />
+            <View style={styles.errorBox}>
+              <Ionicons name="warning-outline" size={13} color="#ef4444" />
               <Text style={styles.errorText}>{farmerError}</Text>
             </View>
           )}
         </View>
 
-        {/* ── Slip Sub-Form ── */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>
-            <Ionicons name="add-circle-outline" size={14} color="#2ecc71" /> पर्ची विवरण जोड़ें
-          </Text>
+        {/* ── 3. Slip Sub-Form (ADDED MULTIPLE TIMES) ── */}
+        <View style={[styles.sectionCard, styles.slipSectionCard]}>
+          <View style={styles.sectionHeaderRow}>
+            <View style={styles.sectionHeaderLeft}>
+              <View style={[styles.sectionIconCircle, { backgroundColor: 'rgba(34,197,94,0.12)' }]}>
+                <Ionicons name="add-circle" size={16} color="#22c55e" />
+              </View>
+              <Text style={styles.sectionTitle}>पर्ची विवरण जोड़ें</Text>
+            </View>
+          </View>
 
-          {/* Date row with shortcuts */}
-          <Text style={styles.label}>तारीख / Date</Text>
-          <View style={styles.dateShortcutRow}>
-            <TouchableOpacity
-              style={[styles.dateShortcut, slipDate === todayFormatted() && styles.dateShortcutActive]}
-              onPress={() => setSlipDate(todayFormatted())}
-            >
-              <Text style={[styles.dateShortcutText, slipDate === todayFormatted() && styles.dateShortcutActiveText]}>
-                आज
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.dateShortcut, slipDate === yesterdayFormatted() && styles.dateShortcutActive]}
-              onPress={() => setSlipDate(yesterdayFormatted())}
-            >
-              <Text style={[styles.dateShortcutText, slipDate === yesterdayFormatted() && styles.dateShortcutActiveText]}>
-                कल
-              </Text>
-            </TouchableOpacity>
+          {/* Date Row with Shortcuts */}
+          <View style={{ marginBottom: 10 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+              <Text style={styles.fieldLabel}>तारीख / Date</Text>
+              <View style={styles.dateShortcutsRow}>
+                <TouchableOpacity
+                  style={[styles.dateChip, slipDate === todayFormatted() && styles.dateChipActive]}
+                  onPress={() => setSlipDate(todayFormatted())}
+                >
+                  <Text style={[styles.dateChipText, slipDate === todayFormatted() && styles.dateChipTextActive]}>
+                    आज
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.dateChip, slipDate === yesterdayFormatted() && styles.dateChipActive]}
+                  onPress={() => setSlipDate(yesterdayFormatted())}
+                >
+                  <Text style={[styles.dateChipText, slipDate === yesterdayFormatted() && styles.dateChipTextActive]}>
+                    कल
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
             <TextInput
-              style={[styles.dateInput, isValidDate(slipDate) && styles.dateInputValid]}
+              style={[styles.inputField, { letterSpacing: 1 }]}
               value={slipDate}
               onChangeText={handleDateChange}
               placeholder="DD/MM/YYYY"
-              placeholderTextColor="#555"
+              placeholderTextColor="#475569"
               keyboardType="numeric"
               maxLength={10}
-              autoCorrect={false}
             />
           </View>
 
-          {/* Cane Owner */}
-          <Text style={styles.label}>गन्ना मालिक / Cane Owner</Text>
-          <View style={styles.ownerRow}>
-            <TouchableOpacity
-              style={[styles.ownerBtn, ownerType === 'self' && styles.ownerBtnSelf]}
-              onPress={() => { setOwnerType('self'); setOwnerName(''); }}
-            >
-              <Ionicons
-                name={ownerType === 'self' ? 'radio-button-on' : 'radio-button-off'}
-                size={16}
-                color={ownerType === 'self' ? '#2ecc71' : '#555'}
+          {/* Cane Owner Radio */}
+          <View style={{ marginBottom: 10 }}>
+            <Text style={styles.fieldLabel}>गन्ना मालिक / Cane Owner</Text>
+            <View style={styles.ownerRow}>
+              <TouchableOpacity
+                style={[styles.ownerBtn, ownerType === 'self' && styles.ownerBtnSelf]}
+                onPress={() => { setOwnerType('self'); setOwnerName(''); }}
+              >
+                <Ionicons
+                  name={ownerType === 'self' ? 'checkmark-circle' : 'radio-button-off'}
+                  size={15}
+                  color={ownerType === 'self' ? '#22c55e' : '#64748b'}
+                />
+                <Text style={[styles.ownerBtnText, ownerType === 'self' && { color: '#22c55e' }]}>
+                  खुद का (मेरा गन्ना)
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.ownerBtn, ownerType === 'other' && styles.ownerBtnOther]}
+                onPress={() => setOwnerType('other')}
+              >
+                <Ionicons
+                  name={ownerType === 'other' ? 'checkmark-circle' : 'radio-button-off'}
+                  size={15}
+                  color={ownerType === 'other' ? '#f0a500' : '#64748b'}
+                />
+                <Text style={[styles.ownerBtnText, ownerType === 'other' && { color: '#f0a500' }]}>
+                  दूसरे का
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {ownerType === 'other' && (
+              <TextInput
+                style={[styles.inputField, { marginTop: 6 }]}
+                value={ownerName}
+                onChangeText={setOwnerName}
+                placeholder="मालिक का नाम दर्ज करें"
+                placeholderTextColor="#475569"
+                autoCorrect={false}
               />
-              <Text style={[styles.ownerBtnText, ownerType === 'self' && { color: '#2ecc71' }]}>
-                खुद का
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.ownerBtn, ownerType === 'other' && styles.ownerBtnOther]}
-              onPress={() => setOwnerType('other')}
-            >
-              <Ionicons
-                name={ownerType === 'other' ? 'radio-button-on' : 'radio-button-off'}
-                size={16}
-                color={ownerType === 'other' ? '#f0a500' : '#555'}
-              />
-              <Text style={[styles.ownerBtnText, ownerType === 'other' && { color: '#f0a500' }]}>
-                दूसरे का
-              </Text>
-            </TouchableOpacity>
+            )}
           </View>
-          {ownerType === 'other' && (
-            <TextInput
-              style={styles.input}
-              value={ownerName}
-              onChangeText={setOwnerName}
-              placeholder="मालिक का नाम दर्ज करें"
-              placeholderTextColor="#555"
-              autoCorrect={false}
-              returnKeyType="done"
-            />
-          )}
 
           {/* Quantity */}
-          <Text style={styles.label}>मात्रा / Quantity (क्विंटल)</Text>
-          <TextInput
-            ref={qtyRef}
-            style={styles.input}
-            value={quantity}
-            onChangeText={v => setQuantity(v.replace(/[^0-9.]/g, ''))}
-            placeholder="जैसे: 12.5"
-            placeholderTextColor="#555"
-            keyboardType="numeric"
-            returnKeyType="done"
-          />
+          <View style={{ marginBottom: 10 }}>
+            <Text style={styles.fieldLabel}>मात्रा / Quantity (क्विंटल)</Text>
+            <TextInput
+              ref={qtyRef}
+              style={[styles.inputField, { fontSize: 16, fontWeight: '800' }]}
+              value={quantity}
+              onChangeText={v => setQuantity(v.replace(/[^0-9.]/g, ''))}
+              placeholder="जैसे: 75.0"
+              placeholderTextColor="#475569"
+              keyboardType="numeric"
+              returnKeyType="done"
+            />
+          </View>
 
-          {/* Comment */}
-          <Text style={styles.label}>टिप्पणी / Comment (वैकल्पिक)</Text>
-          <TextInput
-            style={[styles.input, styles.commentInput]}
-            value={comment}
-            onChangeText={setComment}
-            placeholder="कोई नोट..."
-            placeholderTextColor="#555"
-            multiline
-            numberOfLines={2}
-            textAlignVertical="top"
-          />
+          {/* Comment (Optional) */}
+          <View style={{ marginBottom: 14 }}>
+            <Text style={styles.fieldLabel}>टिप्पणी / Comment (वैकल्पिक)</Text>
+            <TextInput
+              style={[styles.inputField, { height: 42 }]}
+              value={comment}
+              onChangeText={setComment}
+              placeholder="कोई नोट..."
+              placeholderTextColor="#475569"
+            />
+          </View>
 
-          {/* Add Button */}
+          {/* Add Slip Button */}
           <TouchableOpacity style={styles.addSlipBtn} onPress={handleAddSlip} activeOpacity={0.8}>
-            <Ionicons name="add-circle" size={20} color="#1a1a2e" />
-            <Text style={styles.addSlipBtnText}>पर्ची जोड़ें (Add Slip)</Text>
+            <Ionicons name="add-circle" size={19} color="#0f172a" />
+            <Text style={styles.addSlipBtnText}>+ पर्ची जोड़ें (Add Slip)</Text>
           </TouchableOpacity>
         </View>
 
-        {/* ── Staged Slips List ── */}
+        {/* ── 4. Staged Slips List ── */}
         {stagedSlips.length > 0 && (
-          <View style={styles.section}>
+          <View style={styles.stagedSection}>
             <View style={styles.stagedHeader}>
-              <Text style={styles.sectionTitle}>
-                <Ionicons name="list-outline" size={14} color="#06b6d4" /> तैयार पर्चियां ({stagedSlips.length})
-              </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Ionicons name="layers" size={16} color="#06b6d4" />
+                <Text style={styles.stagedTitle}>
+                  तैयार पर्चियां ({stagedSlips.length})
+                </Text>
+              </View>
               <Text style={styles.stagedTotalText}>
-                कुल: {totalQty.toFixed(2)} क्विं
+                कुल: {totalQty.toFixed(1)} क्विं
               </Text>
             </View>
 
             {stagedSlips.map((slip, idx) => (
-              <View key={slip.id} style={styles.stagedCard}>
-                <View style={styles.stagedCardLeft}>
-                  <Text style={styles.stagedCardIdx}>#{idx + 1}</Text>
-                  <View>
-                    <Text style={styles.stagedCardDate}>{slip.date}</Text>
-                    <Text style={styles.stagedCardOwner}>{slip.caneOwner}</Text>
-                    {!!slip.comment && (
-                      <Text style={styles.stagedCardComment} numberOfLines={1}>{slip.comment}</Text>
-                    )}
-                  </View>
+              <View key={slip.id} style={styles.slipCard}>
+                <View style={styles.slipIndexBadge}>
+                  <Text style={styles.slipIndexText}>#{idx + 1}</Text>
                 </View>
-                <Text style={styles.stagedCardQty}>{parseFloat(slip.quantity).toFixed(2)} क्विं</Text>
+
+                <View style={styles.slipDetails}>
+                  <View style={styles.slipBadgeRow}>
+                    <View style={styles.datePill}>
+                      <Ionicons name="calendar-outline" size={11} color="#f0a500" />
+                      <Text style={styles.datePillText}>{slip.date}</Text>
+                    </View>
+                    <View style={styles.ownerPill}>
+                      <Ionicons name="leaf-outline" size={11} color="#22c55e" />
+                      <Text style={styles.ownerPillText}>{slip.caneOwner}</Text>
+                    </View>
+                  </View>
+                  {!!slip.comment && (
+                    <Text style={styles.slipCommentText} numberOfLines={1}>
+                      {slip.comment}
+                    </Text>
+                  )}
+                </View>
+
+                <View style={styles.slipQtyBox}>
+                  <Text style={styles.slipQtyValue}>
+                    {parseFloat(slip.quantity).toFixed(2)}
+                  </Text>
+                  <Text style={styles.slipQtyUnit}>क्विं</Text>
+                </View>
+
                 <TouchableOpacity
                   onPress={() => removeSlip(slip.id)}
-                  style={styles.stagedDeleteBtn}
+                  style={styles.deleteSlipBtn}
                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 >
-                  <Ionicons name="trash-outline" size={16} color="#e74c3c" />
+                  <Ionicons name="trash-outline" size={17} color="#ef4444" />
                 </TouchableOpacity>
               </View>
             ))}
           </View>
         )}
 
-        {/* Bottom padding */}
-        <View style={{ height: stagedSlips.length > 0 ? 90 : 20 }} />
-      </ScrollView>
-    </KeyboardAvoidingView>
-
-      {/* ── Submit Button (outside KAV — always visible above keyboard) ── */}
-      {stagedSlips.length > 0 && (
-        <View style={styles.submitBar}>
+        {/* ── 5. Final Save All Button ── */}
+        {stagedSlips.length > 0 && (
           <TouchableOpacity
-            style={[styles.submitBtn, isSubmitting && styles.submitBtnDisabled]}
+            style={[styles.submitAllBtn, isSubmitting && styles.submitAllBtnDisabled]}
             onPress={handleSubmitAll}
             disabled={isSubmitting}
             activeOpacity={0.85}
           >
             {isSubmitting ? (
-              <ActivityIndicator color="#1a1a2e" />
+              <ActivityIndicator color="#0f172a" />
             ) : (
               <>
-                <Ionicons name="save" size={20} color="#1a1a2e" />
-                <Text style={styles.submitBtnText}>
-                  {stagedSlips.length} पर्चियां सेव करें · {totalQty.toFixed(1)} क्विं
+                <Ionicons name="checkmark-done" size={20} color="#0f172a" />
+                <Text style={styles.submitAllBtnText}>
+                  सभी {stagedSlips.length} पर्चियां सेव करें · {totalQty.toFixed(1)} क्विं
                 </Text>
               </>
             )}
           </TouchableOpacity>
-        </View>
-      )}
-    </View>
+        )}
+
+        <View style={{ height: 40 }} />
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
-// ─── Styles ──────────────────────────────────────────────────────────────────
-const C = {
-  bg: '#0f0f1e',
-  card: '#1a1a2e',
-  border: '#2d2d4e',
-  gold: '#f0a500',
-  green: '#2ecc71',
-  cyan: '#06b6d4',
-  red: '#e74c3c',
-  text: '#f0f0f0',
-  sub: '#888',
-  faint: '#555',
-};
-
 const styles = StyleSheet.create({
-  scroll: { flex: 1, backgroundColor: C.bg },
-  content: { padding: 16 },
-
-  successBanner: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: C.green, borderRadius: 10, padding: 12, marginBottom: 14,
+  container: {
+    flex: 1,
+    backgroundColor: '#0d0d1a',
   },
-  successText: { color: '#fff', fontWeight: '700', fontSize: 14, flex: 1 },
+  content: {
+    paddingHorizontal: 14,
+    paddingTop: 6,
+    paddingBottom: 40,
+  },
+  successBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#22c55e',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12,
+  },
+  successText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 14,
+    flex: 1,
+  },
 
   // Recent Farmers
   recentBox: {
-    backgroundColor: C.card, borderRadius: 14, padding: 12,
-    borderWidth: 1, borderColor: 'rgba(240,165,0,0.3)', marginBottom: 14,
+    backgroundColor: '#16162a',
+    borderRadius: 14,
+    padding: 10,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(240,165,0,0.25)',
   },
-  recentTitle: { color: C.gold, fontSize: 11, fontWeight: '700', marginBottom: 8 },
-  recentScroll: { flexDirection: 'row' },
+  recentTitle: {
+    color: '#f0a500',
+    fontSize: 11,
+    fontWeight: '700',
+    marginBottom: 6,
+  },
+  recentScroll: {
+    flexDirection: 'row',
+  },
   recentChip: {
-    backgroundColor: C.bg, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 8,
-    marginRight: 8, borderWidth: 1, borderColor: 'rgba(240,165,0,0.4)',
-    minWidth: 80, alignItems: 'center',
+    backgroundColor: '#0d0d1a',
+    borderRadius: 18,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginRight: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(240,165,0,0.35)',
+    alignItems: 'center',
   },
-  recentChipCode: { color: C.gold, fontSize: 11, fontWeight: '800' },
-  recentChipName: { color: C.sub, fontSize: 10, marginTop: 2, maxWidth: 80 },
-
-  // Section
-  section: {
-    backgroundColor: C.card, borderRadius: 14, padding: 14,
-    borderWidth: 1, borderColor: C.border, marginBottom: 14,
+  recentChipCode: {
+    color: '#f0a500',
+    fontSize: 12,
+    fontWeight: '800',
   },
-  sectionTitle: { color: C.text, fontSize: 13, fontWeight: '700', marginBottom: 12 },
-
-  // Labels & Inputs
-  label: { color: C.sub, fontSize: 11, fontWeight: '600', marginBottom: 5, marginTop: 8 },
-  input: {
-    backgroundColor: C.bg, borderRadius: 10, padding: 12,
-    color: C.text, fontSize: 15, fontWeight: '600',
-    borderWidth: 1.5, borderColor: C.border, marginBottom: 4,
+  recentChipName: {
+    color: '#94a3b8',
+    fontSize: 10,
+    marginTop: 1,
   },
-  commentInput: { height: 70, textAlignVertical: 'top', paddingTop: 10 },
 
-  // Lookup indicator
-  lookupRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 },
-  lookupText: { color: C.gold, fontSize: 11 },
-
-  // Error
-  errorRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 },
-  errorText: { color: C.red, fontSize: 12, fontWeight: '600' },
-
-  // Date shortcuts
-  dateShortcutRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4,
+  // Section Card
+  sectionCard: {
+    backgroundColor: '#16162a',
+    borderRadius: 16,
+    padding: 14,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#23233c',
   },
-  dateShortcut: {
-    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20,
-    backgroundColor: C.bg, borderWidth: 1.5, borderColor: C.border,
+  slipSectionCard: {
+    borderColor: 'rgba(34,197,94,0.3)',
   },
-  dateShortcutActive: { borderColor: C.gold, backgroundColor: 'rgba(240,165,0,0.15)' },
-  dateShortcutText: { color: C.faint, fontSize: 12, fontWeight: '700' },
-  dateShortcutActiveText: { color: C.gold },
-  dateInput: {
-    flex: 1, backgroundColor: C.bg, borderRadius: 10, padding: 11,
-    color: C.text, fontSize: 14, fontWeight: '600',
-    borderWidth: 1.5, borderColor: C.border,
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
   },
-  dateInputValid: { borderColor: C.green },
+  sectionHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  sectionIconCircle: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sectionTitle: {
+    color: '#f8fafc',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  checkedPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(34,197,94,0.12)',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+  },
+  checkedPillText: {
+    color: '#22c55e',
+    fontSize: 11,
+    fontWeight: '700',
+  },
 
-  // Owner buttons
-  ownerRow: { flexDirection: 'row', gap: 8, marginBottom: 6 },
+  // Form Fields
+  rowDouble: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  fieldLabel: {
+    color: '#94a3b8',
+    fontSize: 11,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  inputField: {
+    backgroundColor: '#0d0d1a',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: '#f8fafc',
+    fontSize: 14,
+    fontWeight: '600',
+    borderWidth: 1.5,
+    borderColor: '#23233c',
+  },
+  lookupIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: 4,
+  },
+  lookupText: {
+    color: '#f0a500',
+    fontSize: 11,
+  },
+  errorBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: 8,
+  },
+  errorText: {
+    color: '#ef4444',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+
+  // Date Shortcuts
+  dateShortcutsRow: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  dateChip: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 8,
+    backgroundColor: '#0d0d1a',
+    borderWidth: 1,
+    borderColor: '#23233c',
+  },
+  dateChipActive: {
+    borderColor: '#f0a500',
+    backgroundColor: 'rgba(240,165,0,0.12)',
+  },
+  dateChipText: {
+    color: '#94a3b8',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  dateChipTextActive: {
+    color: '#f0a500',
+    fontWeight: '700',
+  },
+
+  // Owner Options
+  ownerRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
   ownerBtn: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: C.bg, borderRadius: 10, padding: 12,
-    borderWidth: 1.5, borderColor: C.border,
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#0d0d1a',
+    borderRadius: 10,
+    paddingVertical: 10,
+    borderWidth: 1.5,
+    borderColor: '#23233c',
   },
-  ownerBtnSelf: { borderColor: C.green, backgroundColor: 'rgba(46,204,113,0.08)' },
-  ownerBtnOther: { borderColor: C.gold, backgroundColor: 'rgba(240,165,0,0.08)' },
-  ownerBtnText: { color: C.sub, fontSize: 13, fontWeight: '700' },
+  ownerBtnSelf: {
+    borderColor: '#22c55e',
+    backgroundColor: 'rgba(34,197,94,0.08)',
+  },
+  ownerBtnOther: {
+    borderColor: '#f0a500',
+    backgroundColor: 'rgba(240,165,0,0.08)',
+  },
+  ownerBtnText: {
+    color: '#94a3b8',
+    fontSize: 12,
+    fontWeight: '600',
+  },
 
-  // Add slip button
+  // Add Slip Button
   addSlipBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    backgroundColor: C.green, borderRadius: 12, paddingVertical: 14, marginTop: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#f0a500',
+    borderRadius: 12,
+    paddingVertical: 13,
   },
-  addSlipBtnText: { color: '#1a1a2e', fontSize: 15, fontWeight: '800' },
+  addSlipBtnText: {
+    color: '#0f172a',
+    fontSize: 14,
+    fontWeight: '900',
+  },
 
-  // Staged list
+  // Staged Slips Section
+  stagedSection: {
+    backgroundColor: '#16162a',
+    borderRadius: 16,
+    padding: 14,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(6,182,212,0.3)',
+  },
   stagedHeader: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
   },
-  stagedTotalText: { color: C.cyan, fontSize: 13, fontWeight: '800' },
-  stagedCard: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    backgroundColor: C.bg, borderRadius: 10, padding: 12,
-    marginBottom: 6, borderWidth: 1, borderColor: C.border,
+  stagedTitle: {
+    color: '#f8fafc',
+    fontSize: 14,
+    fontWeight: '800',
   },
-  stagedCardLeft: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
-  stagedCardIdx: { color: C.faint, fontSize: 12, fontWeight: '800', width: 22 },
-  stagedCardDate: { color: C.gold, fontSize: 13, fontWeight: '700' },
-  stagedCardOwner: { color: C.sub, fontSize: 11 },
-  stagedCardComment: { color: C.faint, fontSize: 10, fontStyle: 'italic' },
-  stagedCardQty: { color: C.cyan, fontSize: 14, fontWeight: '800', minWidth: 80, textAlign: 'right' },
-  stagedDeleteBtn: { padding: 4 },
+  stagedTotalText: {
+    color: '#06b6d4',
+    fontSize: 13,
+    fontWeight: '800',
+  },
 
-  // Submit bar
-  submitBar: {
-    padding: 12, backgroundColor: C.bg,
-    borderTopWidth: 1, borderTopColor: C.border,
+  // Individual Staged Slip Card
+  slipCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#0d0d1a',
+    borderRadius: 12,
+    padding: 10,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#23233c',
   },
-  submitBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
-    backgroundColor: C.gold, borderRadius: 14, paddingVertical: 16,
+  slipIndexBadge: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#16162a',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  submitBtnDisabled: { opacity: 0.6 },
-  submitBtnText: { color: '#1a1a2e', fontSize: 15, fontWeight: '800' },
+  slipIndexText: {
+    color: '#64748b',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  slipDetails: {
+    flex: 1,
+  },
+  slipBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flexWrap: 'wrap',
+  },
+  datePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  datePillText: {
+    color: '#f0a500',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  ownerPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  ownerPillText: {
+    color: '#22c55e',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  slipCommentText: {
+    color: '#64748b',
+    fontSize: 10,
+    marginTop: 2,
+    fontStyle: 'italic',
+  },
+  slipQtyBox: {
+    alignItems: 'flex-end',
+  },
+  slipQtyValue: {
+    color: '#06b6d4',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  slipQtyUnit: {
+    color: '#64748b',
+    fontSize: 10,
+  },
+  deleteSlipBtn: {
+    padding: 4,
+  },
+
+  // Submit All Button
+  submitAllBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#22c55e',
+    borderRadius: 14,
+    paddingVertical: 15,
+  },
+  submitAllBtnDisabled: {
+    opacity: 0.6,
+  },
+  submitAllBtnText: {
+    color: '#0f172a',
+    fontSize: 15,
+    fontWeight: '900',
+  },
 });
