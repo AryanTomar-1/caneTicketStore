@@ -37,7 +37,8 @@ export default function DashboardScreen(): React.ReactElement {
   const [uniqueNames, setUniqueNames] = useState<string[]>([]);
   const [showNamesModal, setShowNamesModal] = useState(false);
   const [filterDate, setFilterDate] = useState('');
-  const [showDateInput, setShowDateInput] = useState(false);
+  const [showDateModal, setShowDateModal] = useState(false);
+  const [tempDateFilter, setTempDateFilter] = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const [isSearchListening, setIsSearchListening] = useState(false);
   const [selectedOwners, setSelectedOwners] = useState<string[]>([]);
@@ -221,8 +222,9 @@ export default function DashboardScreen(): React.ReactElement {
     setSearchText('');
     setSelectedNames([]);
     setFilterDate('');
+    setTempDateFilter('');
     setSelectedOwners([]);
-    setShowDateInput(false);
+    setShowDateModal(false);
     setFiltered(tickets);
   };
 
@@ -651,7 +653,7 @@ export default function DashboardScreen(): React.ReactElement {
               </View>
             </Animated.View>
           </View>
-          <Text style={styles.holdHint}>📌 माइक दबाकर रखें — बोलकर खोजें</Text>
+          <Text style={styles.holdHint}>⚡ माइक दबाकर बोलें • या तारीख/नाम से खोजें</Text>
 
           {/* ── Filters ── */}
           <View style={styles.filterRow}>
@@ -677,10 +679,29 @@ export default function DashboardScreen(): React.ReactElement {
               <Ionicons name="chevron-down" size={12} color={selectedNames.length > 0 ? '#f0a500' : '#888'} />
             </TouchableOpacity>
 
-            <TouchableOpacity style={[styles.filterChip, filterDate && styles.filterChipOn]}
-              onPress={() => setShowDateInput(!showDateInput)}>
+            <TouchableOpacity
+              style={[styles.filterChip, filterDate && styles.filterChipOn]}
+              onPress={() => {
+                setTempDateFilter(filterDate);
+                setShowDateModal(true);
+              }}
+            >
               <Ionicons name="calendar-outline" size={13} color={filterDate ? '#f0a500' : '#888'} />
-              <Text style={[styles.filterChipText, filterDate && { color: '#f0a500' }]}>{filterDate || 'तारीख'}</Text>
+              <Text style={[styles.filterChipText, filterDate && { color: '#f0a500' }]} numberOfLines={1}>
+                {filterDate ? `तारीख: ${filterDate}` : 'तारीख चुनें'}
+              </Text>
+              {filterDate ? (
+                <TouchableOpacity
+                  onPress={(e) => {
+                    e.stopPropagation();
+                    handleDateFilter('');
+                    setTempDateFilter('');
+                  }}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Ionicons name="close-circle" size={13} color="#f0a500" />
+                </TouchableOpacity>
+              ) : null}
             </TouchableOpacity>
 
             {hasFilters ? (
@@ -690,26 +711,6 @@ export default function DashboardScreen(): React.ReactElement {
               </TouchableOpacity>
             ) : null}
           </View>
-
-          {showDateInput && (
-            <View style={styles.dateInputRow}>
-              <Ionicons name="calendar" size={15} color="#f0a500" />
-              <TextInput
-                style={styles.dateInput}
-                value={filterDate}
-                onChangeText={handleDateFilter}
-                placeholder="जैसे: 2024 या 03/2024 या 15"
-                placeholderTextColor="#555"
-                keyboardType="default"
-                autoFocus
-              />
-              {filterDate ? (
-                <TouchableOpacity onPress={() => { handleDateFilter(''); setShowDateInput(false); }}>
-                  <Ionicons name="close-circle" size={16} color="#888" />
-                </TouchableOpacity>
-              ) : null}
-            </View>
-          )}
 
           {selectedNames.length > 0 && (
             <View style={styles.activeTag}>
@@ -724,7 +725,7 @@ export default function DashboardScreen(): React.ReactElement {
             </View>
           )}
 
-          <Text style={styles.resultsLabel}>{filtered.length} रिकॉर्ड</Text>
+          <Text style={styles.resultsLabel}>📋 कुल {filtered.length} पर्चियां मिलीं</Text>
         </View>
 
         {/* ── Ticket List ── */}
@@ -750,6 +751,10 @@ export default function DashboardScreen(): React.ReactElement {
 
       {/* ══ Mill Payment Date Modal ══ */}
       <Modal visible={showMillModal} transparent animationType="fade">
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
         <View style={styles.overlay}>
           <View style={styles.millModalCard}>
             <View style={styles.millModalHeader}>
@@ -793,6 +798,98 @@ export default function DashboardScreen(): React.ReactElement {
             </View>
           </View>
         </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* ══ Date Filter Modal ══ */}
+      <Modal visible={showDateModal} transparent animationType="fade">
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
+          <TouchableOpacity
+            style={styles.overlay}
+            activeOpacity={1}
+            onPress={() => setShowDateModal(false)}
+          >
+            <TouchableOpacity
+              style={styles.millModalCard}
+              activeOpacity={1}
+              onPress={(e) => e.stopPropagation()}
+            >
+              <View style={styles.millModalHeader}>
+                <Ionicons name="calendar" size={26} color="#f0a500" />
+                <Text style={styles.millModalTitle}>📅 तारीख से खोजें</Text>
+              </View>
+              <Text style={styles.millModalDesc}>
+                तारीख, महीना या साल डालकर पर्चियां फ़िल्टर करें (जैसे: 15, 03/2024, या 2024)।
+              </Text>
+
+              {/* Quick shortcut chips */}
+              <View style={{ flexDirection: 'row', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+                <TouchableOpacity
+                  style={[
+                    styles.quickOwnerChip,
+                    tempDateFilter === todayFormatted() && styles.quickOwnerChipActive,
+                  ]}
+                  onPress={() => setTempDateFilter(todayFormatted())}
+                >
+                  <Text
+                    style={[
+                      styles.quickOwnerChipText,
+                      tempDateFilter === todayFormatted() && styles.quickOwnerChipActiveText,
+                    ]}
+                  >
+                    📅 आज ({todayFormatted()})
+                  </Text>
+                </TouchableOpacity>
+
+                {tempDateFilter ? (
+                  <TouchableOpacity
+                    style={[styles.quickOwnerChip, { borderColor: 'rgba(231,76,60,0.4)', backgroundColor: 'rgba(231,76,60,0.1)' }]}
+                    onPress={() => setTempDateFilter('')}
+                  >
+                    <Text style={[styles.quickOwnerChipText, { color: '#e74c3c' }]}>
+                      ✕ साफ़ करें
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+
+              <TextInput
+                style={[styles.millDateInput, { borderColor: '#f0a500' }]}
+                value={tempDateFilter}
+                onChangeText={setTempDateFilter}
+                placeholder="जैसे: 2024 या 03/2024 या 15"
+                placeholderTextColor="#555"
+                keyboardType="default"
+                autoFocus
+              />
+
+              <Text style={styles.millDateHint}>
+                {tempDateFilter ? `चयनित: ${tempDateFilter}` : 'उदाहरण: 2024 या 03/2024 या 15'}
+              </Text>
+
+              <View style={styles.millModalBtns}>
+                <TouchableOpacity
+                  style={[styles.millModalBtn, { backgroundColor: '#2d2d4e' }]}
+                  onPress={() => setShowDateModal(false)}
+                >
+                  <Text style={styles.millModalBtnText}>रद्द करें</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.millModalBtn, { backgroundColor: '#f0a500' }]}
+                  onPress={() => {
+                    handleDateFilter(tempDateFilter);
+                    setShowDateModal(false);
+                  }}
+                >
+                  <Text style={[styles.millModalBtnText, { color: '#1a1a2e' }]}>✓ फ़िल्टर लगाएं</Text>
+                </TouchableOpacity>
+              </View>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* ══ Backup/Restore Modal ══ */}
@@ -1117,7 +1214,7 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#0f0f1e' },
   container: { flex: 1 },
   header: { padding: 14, paddingBottom: 0 },
-  listContent: { padding: 14, paddingBottom: 5 },
+  listContent: { padding: 14, paddingBottom: 90 },
 
   seasonTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
   seasonRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -1274,7 +1371,7 @@ const styles = StyleSheet.create({
   editOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'flex-end' },
   editSheet: { backgroundColor: '#1a1a2e', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, maxHeight: '92%', borderTopWidth: 1, borderColor: '#2d2d4e' },
   editField: { marginBottom: 14 },
-  editLabel: { color: '#888', fontSize: 12, fontWeight: '600' },
+  editLabel: { color: '#888', fontSize: 12, fontWeight: '600', marginBottom: 6 },
   editLabelRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
   lockedBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(240,165,0,0.1)', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6, borderWidth: 1, borderColor: 'rgba(240,165,0,0.3)' },
   lockedBadgeText: { color: '#f0a500', fontSize: 10, fontWeight: '700' },

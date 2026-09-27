@@ -283,10 +283,11 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
+    <View style={{ flex: 1 }}>
     <KeyboardAvoidingView
       style={{ flex: 1 }}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={80}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 80 : 0}
     >
       <ScrollView
         style={styles.scroll}
@@ -457,7 +458,7 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
               placeholder="मालिक का नाम दर्ज करें"
               placeholderTextColor="#555"
               autoCorrect={false}
-              autoFocus
+              returnKeyType="done"
             />
           )}
 
@@ -531,11 +532,12 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
           </View>
         )}
 
-        {/* Bottom padding for the fixed submit button */}
-        <View style={{ height: 80 }} />
+        {/* Bottom padding */}
+        <View style={{ height: stagedSlips.length > 0 ? 90 : 20 }} />
       </ScrollView>
+    </KeyboardAvoidingView>
 
-      {/* ── Fixed Submit Button ── */}
+      {/* ── Submit Button (outside KAV — always visible above keyboard) ── */}
       {stagedSlips.length > 0 && (
         <View style={styles.submitBar}>
           <TouchableOpacity
@@ -557,7 +559,7 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
           </TouchableOpacity>
         </View>
       )}
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 
@@ -680,7 +682,6 @@ const styles = StyleSheet.create({
 
   // Submit bar
   submitBar: {
-    position: 'absolute', bottom: 0, left: 0, right: 0,
     padding: 12, backgroundColor: C.bg,
     borderTopWidth: 1, borderTopColor: C.border,
   },

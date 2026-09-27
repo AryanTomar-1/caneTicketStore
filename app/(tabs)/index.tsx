@@ -1,33 +1,33 @@
-import React, { useState, useEffect } from 'react';
+import { Ionicons } from '@expo/vector-icons';
+import { useIsFocused } from '@react-navigation/native';
+import * as Haptics from 'expo-haptics';
+import * as Speech from 'expo-speech';
+import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from 'expo-speech-recognition';
+import React, { useEffect, useState } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  Modal,
-  TextInput,
-  ScrollView,
-  Animated,
-  Alert,
   ActivityIndicator,
+  Alert,
+  Animated,
   KeyboardAvoidingView,
-  Platform,
+  Modal,
   PanResponder,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useIsFocused } from '@react-navigation/native';
-import { STEPS } from '../../constants/steps';
-import { useMicPulse, useSpeakerPulse } from '../../hooks/useMicPulse';
-import { Ionicons } from '@expo/vector-icons';
-import * as Speech from 'expo-speech';
-import * as Haptics from 'expo-haptics';
-import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from 'expo-speech-recognition';
-import { saveTicket, getTicketByFarmer_code, checkDuplicate, getRecentFarmers } from '../../utils/storage';
-import { formatDateInput, isValidDate, todayFormatted, yesterdayFormatted } from '../../utils/dateHelpers';
-import { FormData, ConfirmedValues, RecentFarmer } from '../../types';
-import SeasonSelector from '../../components/SeasonSelector';
 import BatchEntryScreen from '../../components/BatchEntryScreen';
+import SeasonSelector from '../../components/SeasonSelector';
+import { STEPS } from '../../constants/steps';
 import { useSeason } from '../../context/SeasonContext';
+import { useMicPulse, useSpeakerPulse } from '../../hooks/useMicPulse';
+import { ConfirmedValues, FormData, RecentFarmer } from '../../types';
+import { formatDateInput, isValidDate, todayFormatted, yesterdayFormatted } from '../../utils/dateHelpers';
+import { checkDuplicate, getRecentFarmers, getTicketByFarmer_code, saveTicket } from '../../utils/storage';
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
@@ -435,7 +435,7 @@ export default function VoiceInputScreen(): React.ReactElement {
             {currentStep <= 2 && recentFarmers.length > 0 && (
               <View style={styles.recentBox}>
                 <Text style={styles.recentTitle}>
-                  <Ionicons name="time-outline" size={11} color="#f0a500" /> हाल के किसान — टैप करके चुनें
+                  <Ionicons name="time-outline" size={11} color="#f0a500" /> हाल के किसान — टैप करके चुनें ...
                 </Text>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                   {recentFarmers.map(f => (
