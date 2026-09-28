@@ -93,12 +93,13 @@ export function BarChart({
 
   if (data.length === 0) return <EmptyChart />;
 
-  const values   = data.map(d => d.value);
-  const maxVal   = Math.max(...values, 1);
-  const barWidth = Math.max(
-    BAR_MIN_WIDTH,
-    (SCREEN_WIDTH - 72) / Math.max(data.length, 1) - BAR_GAP,
-  );
+  const values    = data.map(d => d.value);
+  const maxVal    = Math.max(...values, 1);
+  // Fixed 56px per bar — ensures content overflows and is always scrollable
+  const barWidth  = 56;
+  const minContentW = SCREEN_WIDTH - 64;
+  const computedW = data.length * (barWidth + BAR_GAP) + 60;
+  const totalContentW = Math.max(minContentW, computedW);
 
   return (
     <View style={styles.chartWrapper}>
@@ -111,16 +112,19 @@ export function BarChart({
 
       <ScrollView
         horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={{ paddingHorizontal: 8 }}
+        showsHorizontalScrollIndicator={data.length > 4}
+        nestedScrollEnabled={true}
+        scrollEventThrottle={16}
+        contentContainerStyle={{ paddingRight: 24 }}
       >
         {/*
           LAYOUT (height = TOTAL_H):
             [TOP_PAD px]   ← value labels float here, never clipped
             [CHART_HEIGHT] ← bars grow upward from bottom of this zone
             [X_LABEL_H px] ← x-axis text below
+          Width = totalContentW so horizontal scroll always works.
         */}
-        <View style={{ height: TOTAL_H, position: 'relative' }}>
+        <View style={{ width: totalContentW, height: TOTAL_H, position: 'relative' }}>
 
           {/* Grid lines sit in the chart zone (offset by TOP_PAD) */}
           <View
@@ -128,7 +132,7 @@ export function BarChart({
               position: 'absolute',
               top: TOP_PAD,
               height: CHART_HEIGHT,
-              left: 36,
+              left: 40,
               right: 0,
             }}
             pointerEvents="none"
@@ -136,35 +140,35 @@ export function BarChart({
             <GridLines maxVal={maxVal} />
           </View>
 
-          {/* Bars row — aligned to the BOTTOM of the chart zone */}
+          {/* Bars row — flex row from Y-axis gutter, NOT absolute-pinned to right */}
           <View
             style={{
               position: 'absolute',
               top: TOP_PAD,
-              left: 36,
-              right: 0,
+              left: 40,
+              width: totalContentW - 40,
               height: CHART_HEIGHT,
               flexDirection: 'row',
               alignItems: 'flex-end',
             }}
           >
             {data.map((item, idx) => {
-              const val       = values[idx];
-              const ratio     = maxVal > 0 ? val / maxVal : 0;
-              const barH      = Math.max(4, ratio * CHART_HEIGHT);
+              const val        = values[idx];
+              const ratio      = maxVal > 0 ? val / maxVal : 0;
+              const barH       = Math.max(4, ratio * CHART_HEIGHT);
               const isSelected = selectedIdx === idx;
-              const color     = isSelected ? CHART_COLORS.barSelected : accentColor;
-              const glow      = isSelected ? CHART_COLORS.barSelectedGlow : accentGlow;
+              const color      = isSelected ? CHART_COLORS.barSelected : accentColor;
+              const glow       = isSelected ? CHART_COLORS.barSelectedGlow : accentGlow;
 
               return (
                 <TouchableOpacity
                   key={idx}
                   onPress={() => setSelectedIdx(isSelected ? null : idx)}
                   activeOpacity={0.8}
+                  delayPressIn={50}
                   style={{ width: barWidth, marginRight: BAR_GAP, alignItems: 'center' }}
                 >
-                  {/* Value label — lives ABOVE the bar; since parent is flex-end,
-                      this naturally floats above the bar without touching TOP_PAD */}
+                  {/* Value label — above the bar */}
                   <Text style={[styles.barValueLabel, { color }]}>
                     {val}
                   </Text>
@@ -175,7 +179,7 @@ export function BarChart({
                       styles.bar,
                       {
                         height: barH,
-                        width: barWidth - 6,
+                        width: barWidth - 8,
                         backgroundColor: color,
                         shadowColor: glow,
                         shadowRadius: isSelected ? 12 : 6,
@@ -189,13 +193,13 @@ export function BarChart({
             })}
           </View>
 
-          {/* X-axis labels — absolute row at the very bottom */}
+          {/* X-axis labels row — same width as bars row */}
           <View
             style={{
               position: 'absolute',
               bottom: 0,
-              left: 36,
-              right: 0,
+              left: 40,
+              width: totalContentW - 40,
               height: X_LABEL_H,
               flexDirection: 'row',
               alignItems: 'center',
@@ -272,8 +276,10 @@ export function LineChart({
 
       <ScrollView
         horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={{ paddingHorizontal: 0 }}
+        showsHorizontalScrollIndicator={data.length > 4}
+        nestedScrollEnabled={true}
+        scrollEventThrottle={16}
+        contentContainerStyle={{ paddingRight: 24 }}
       >
         <View style={{ width: innerW, height: TOTAL_H, position: 'relative' }}>
 

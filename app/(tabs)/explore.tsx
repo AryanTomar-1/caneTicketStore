@@ -144,9 +144,16 @@ export default function DashboardScreen(): React.ReactElement {
     const namesToUse = overrideNames ?? selectedNames;
     const dateToUse = overrideDate ?? filterDate;
 
+    // Always derive unique owners from ALL tickets
     setUniqueOwners([...new Set(allData.map(t => t.caneOwner).filter(Boolean))].sort());
     setTickets(allData);
-    setUniqueNames([...new Set(allData.map(t => t.name))].sort());
+
+    // uniqueNames = names filtered by the currently active owner selection
+    const ownerBase = ownersToUse.length > 0
+      ? allData.filter(t => ownersToUse.includes(t.caneOwner))
+      : allData;
+    setUniqueNames([...new Set(ownerBase.map(t => t.name))].sort());
+
     applyFilters(allData, searchToUse, namesToUse, dateToUse, ownersToUse);
   };
 
@@ -213,16 +220,30 @@ export default function DashboardScreen(): React.ReactElement {
 
   const handleSelectOwner = (owner: string | null) => {
     if (owner === null) {
-      setSelectedOwners([]);
-      setShowOwnerModal(false);
-      applyFilters(tickets, searchText, selectedNames, filterDate, []);
-      return;
+    setSelectedOwners([]);
+    setShowOwnerModal(false);
+    // Restore full name list when owner filter is cleared
+    setUniqueNames([...new Set(tickets.map(t => t.name))].sort());
+    applyFilters(tickets, searchText, selectedNames, filterDate, []);
+    return;
     }
     const newOwners = selectedOwners.includes(owner)
       ? selectedOwners.filter(o => o !== owner)
       : [...selectedOwners, owner];
     setSelectedOwners(newOwners);
-    applyFilters(tickets, searchText, selectedNames, filterDate, newOwners);
+
+    // Recompute uniqueNames scoped to the new owner selection
+    // and clear any name selections that are no longer valid
+    const ownerBase = newOwners.length > 0
+      ? tickets.filter(t => newOwners.includes(t.caneOwner))
+      : tickets;
+    const newUniqueNames = [...new Set(ownerBase.map(t => t.name))].sort();
+    setUniqueNames(newUniqueNames);
+    // Drop any previously-selected names that don't exist under the new owner filter
+    const validNames = selectedNames.filter(n => newUniqueNames.includes(n));
+    if (validNames.length !== selectedNames.length) setSelectedNames(validNames);
+
+    applyFilters(tickets, searchText, validNames, filterDate, newOwners);
   };
 
   const handleSelectName = (name: string | null) => {
