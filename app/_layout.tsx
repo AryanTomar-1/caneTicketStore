@@ -1,11 +1,11 @@
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import 'react-native-reanimated';
 import { SeasonProvider } from '../context/SeasonContext';
 import { cleanupOldSeasons } from '../utils/storage';
 import { useEffect } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Animated, Easing } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Animated, Easing, Platform, StatusBar as StatusBarRN } from 'react-native';
 import { useOTAUpdates } from '../hooks/useOTAUpdates';
 import { useRef } from 'react';
 
@@ -18,7 +18,14 @@ function OTABanner({ status, onApply, onCheck }: {
   onApply: () => void;
   onCheck: () => void;
 }) {
-  const slideAnim = useRef(new Animated.Value(-80)).current;
+  const insets = useSafeAreaInsets();
+  const topInset = Math.max(
+    insets.top,
+    Platform.OS === 'android' ? (StatusBarRN.currentHeight || 0) : 0
+  );
+
+  const initialHiddenOffset = -(topInset + 120);
+  const slideAnim = useRef(new Animated.Value(initialHiddenOffset)).current;
   const dotAnim = useRef(new Animated.Value(0)).current;
 
   // Slide in when status changes to something visible
@@ -26,12 +33,12 @@ function OTABanner({ status, onApply, onCheck }: {
 
   useEffect(() => {
     Animated.timing(slideAnim, {
-      toValue: visible ? 0 : -80,
+      toValue: visible ? 0 : -(topInset + 120),
       duration: 350,
       easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
     }).start();
-  }, [visible]);
+  }, [visible, topInset]);
 
   // Animated pulsing dot for downloading/checking
   useEffect(() => {
@@ -55,7 +62,7 @@ function OTABanner({ status, onApply, onCheck }: {
 
   return (
     <Animated.View style={[bannerStyles.container, { transform: [{ translateY: slideAnim }] }]}>
-      <View style={bannerStyles.inner}>
+      <View style={[bannerStyles.inner, { paddingTop: topInset + 6 }]}>
         <Animated.View style={[
           bannerStyles.dot,
           { opacity: dotOpacity, backgroundColor: status === 'ready' ? '#2ecc71' : '#f0a500' },

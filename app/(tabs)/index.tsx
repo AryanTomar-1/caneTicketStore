@@ -21,11 +21,13 @@ import * as Haptics from 'expo-haptics';
 import * as Speech from 'expo-speech';
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from 'expo-speech-recognition';
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import BatchEntryScreen from '../../components/BatchEntryScreen';
 import SeasonSelector from '../../components/SeasonSelector';
 import { STEPS, Step } from '../../constants/steps';
 import { useSeason } from '../../context/SeasonContext';
 import { useMicPulse, useSpeakerPulse } from '../../hooks/useMicPulse';
+import { useKeyboard } from '../../hooks/useKeyboard';
 import { FormData, RecentFarmer } from '../../types';
 import { formatDateInput, isValidDate, todayFormatted, yesterdayFormatted } from '../../utils/dateHelpers';
 import { checkDuplicate, getRecentFarmers, getTicketByFarmer_code, saveTicket } from '../../utils/storage';
@@ -34,6 +36,54 @@ export default function VoiceInputScreen(): React.ReactElement {
   const insets = useSafeAreaInsets();
   const isFocused = useIsFocused();
   const { selectedSeason } = useSeason();
+  const { keyboardHeight } = useKeyboard();
+  const mainScrollRef = useRef<ScrollView>(null);
+
+  // ── Speaker / TTS Audio toggle ─────────────────────────────────────────────
+  const [isSpeakerEnabled, setIsSpeakerEnabled] = useState<boolean>(true);
+  const isSpeakerEnabledRef = useRef<boolean>(true);
+  const [speakerToast, setSpeakerToast] = useState<string | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    isSpeakerEnabledRef.current = isSpeakerEnabled;
+  }, [isSpeakerEnabled]);
+
+  useEffect(() => {
+    AsyncStorage.getItem('@cane_speaker_enabled')
+      .then(val => {
+        if (val !== null) {
+          const enabled = val === 'true';
+          setIsSpeakerEnabled(enabled);
+          isSpeakerEnabledRef.current = enabled;
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const toggleSpeaker = async (): Promise<void> => {
+    const nextState = !isSpeakerEnabledRef.current;
+    setIsSpeakerEnabled(nextState);
+    isSpeakerEnabledRef.current = nextState;
+    await AsyncStorage.setItem('@cane_speaker_enabled', String(nextState)).catch(() => {});
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setSpeakerToast(nextState ? '🔊 स्पीकर चालू (Speaker ON)' : '🔇 स्पीकर बंद (Speaker OFF)');
+    toastTimerRef.current = setTimeout(() => {
+      setSpeakerToast(null);
+    }, 2200);
+
+    if (!nextState) {
+      Speech.stop();
+      setIsSpeaking(false);
+      speaker.stop();
+    } else {
+      if (currentStepDef) {
+        speakText(currentStepDef.speak, true);
+      }
+    }
+  };
 
   // ── Mode toggle ────────────────────────────────────────────────────────────
   const [mode, setMode] = useState<'single' | 'batch'>('single');
@@ -169,7 +219,8 @@ export default function VoiceInputScreen(): React.ReactElement {
   };
 
   // ── TTS ────────────────────────────────────────────────────────────────────
-  const speakText = (text: string): void => {
+  const speakText = (text: string, force: boolean = false): void => {
+    if (!isSpeakerEnabledRef.current && !force) return;
     Speech.stop();
     setIsSpeaking(true);
     speaker.start();
@@ -425,7 +476,7 @@ export default function VoiceInputScreen(): React.ReactElement {
   return (
     <KeyboardAvoidingView
       style={{ flex: 1 }}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
       <View style={[styles.safe, { paddingTop: Math.max(insets.top, 10) }]}>
         {/* ── 1. HEADER ── */}
@@ -437,6 +488,16 @@ export default function VoiceInputScreen(): React.ReactElement {
             </View>
             <SeasonSelector prefix="सीजन: " />
           </View>
+
+          {/* Speaker Status Toast Notification */}
+          {speakerToast && (
+            <View style={[
+              styles.speakerToastBanner,
+              !isSpeakerEnabled && styles.speakerToastBannerMuted
+            ]}>
+              <Text style={styles.speakerToastText}>{speakerToast}</Text>
+            </View>
+          )}
 
           {/* ── 2. ENTRY TYPE (Segmented Control) ── */}
           <View style={styles.segmentedControl}>
@@ -488,8 +549,13 @@ export default function VoiceInputScreen(): React.ReactElement {
         ) : (
           /* ── SINGLE PERCHI / VOICE FLOW ── */
           <ScrollView
-            contentContainerStyle={styles.scrollContent}
+            ref={mainScrollRef}
+            contentContainerStyle={[
+              styles.scrollContent,
+              { paddingBottom: keyboardHeight > 0 ? keyboardHeight + 80 : 40 }
+            ]}
             keyboardShouldPersistTaps="handled"
+            automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
             showsVerticalScrollIndicator={false}
           >
             {/* Success Notification Banner */}
@@ -702,17 +768,22 @@ export default function VoiceInputScreen(): React.ReactElement {
                       <Text style={styles.stepSubtitleEn}>/ {currentStepDef.label}</Text>
                     </View>
 
-                    {/* Speaker Pulse */}
+                    {/* Speaker Pulse / Enable-Disable Toggle */}
                     <TouchableOpacity
                       style={styles.speakerTrigger}
-                      onPress={() => speakText(currentStepDef.speak)}
+                      onPress={toggleSpeaker}
                       activeOpacity={0.7}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                     >
-                      <Animated.View style={[styles.speakerCircle, { transform: [{ scale: speaker.anim }] }]}>
+                      <Animated.View style={[
+                        styles.speakerCircle,
+                        !isSpeakerEnabled && styles.speakerCircleDisabled,
+                        isSpeaking && { transform: [{ scale: speaker.anim }] }
+                      ]}>
                         <Ionicons
-                          name={isSpeaking ? 'volume-high' : 'volume-medium-outline'}
+                          name={!isSpeakerEnabled ? 'volume-mute' : (isSpeaking ? 'volume-high' : 'volume-medium')}
                           size={20}
-                          color={isSpeaking ? '#f0a500' : '#94a3b8'}
+                          color={!isSpeakerEnabled ? '#ef4444' : '#f0a500'}
                         />
                       </Animated.View>
                     </TouchableOpacity>
@@ -773,6 +844,9 @@ export default function VoiceInputScreen(): React.ReactElement {
                             style={styles.mainInput}
                             value={inputValue}
                             onChangeText={setInputValue}
+                            onFocus={() => {
+                              setTimeout(() => mainScrollRef.current?.scrollToEnd({ animated: true }), 120);
+                            }}
                             placeholder="मालिक का नाम लिखें या बोलें..."
                             placeholderTextColor="#475569"
                             autoFocus
@@ -821,6 +895,9 @@ export default function VoiceInputScreen(): React.ReactElement {
                           style={[styles.mainInput, { letterSpacing: 2, fontSize: 18, textAlign: 'center' }]}
                           value={inputValue}
                           onChangeText={handleInputChange}
+                          onFocus={() => {
+                            setTimeout(() => mainScrollRef.current?.scrollToEnd({ animated: true }), 120);
+                          }}
                           placeholder="DD/MM/YYYY"
                           placeholderTextColor="#475569"
                           keyboardType="numeric"
@@ -857,6 +934,9 @@ export default function VoiceInputScreen(): React.ReactElement {
                           style={[styles.mainInput, styles.multilineInput]}
                           value={inputValue}
                           onChangeText={setInputValue}
+                          onFocus={() => {
+                            setTimeout(() => mainScrollRef.current?.scrollToEnd({ animated: true }), 120);
+                          }}
                           placeholder="कोई टिप्पणी या नोट..."
                           placeholderTextColor="#475569"
                           multiline
@@ -893,6 +973,9 @@ export default function VoiceInputScreen(): React.ReactElement {
                         style={styles.mainInput}
                         value={inputValue}
                         onChangeText={handleInputChange}
+                        onFocus={() => {
+                          setTimeout(() => mainScrollRef.current?.scrollToEnd({ animated: true }), 120);
+                        }}
                         placeholder={currentStepDef.placeholder}
                         placeholderTextColor="#475569"
                         keyboardType={currentStepDef.keyboardType}
@@ -982,7 +1065,7 @@ export default function VoiceInputScreen(): React.ReactElement {
                   {/* Replay Question Button */}
                   <TouchableOpacity
                     style={styles.repeatQuestionBtn}
-                    onPress={() => speakText(currentStepDef.speak)}
+                    onPress={() => speakText(currentStepDef.speak, true)}
                     activeOpacity={0.7}
                   >
                     <Ionicons name="volume-medium-outline" size={16} color="#f0a500" />
@@ -1313,6 +1396,35 @@ const styles = StyleSheet.create({
     borderColor: '#23233c',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  speakerCircleDisabled: {
+    borderColor: 'rgba(239, 68, 68, 0.4)',
+    backgroundColor: 'rgba(239, 68, 68, 0.12)',
+  },
+  speakerToastBanner: {
+    position: 'absolute',
+    top: 64,
+    alignSelf: 'center',
+    zIndex: 9999,
+    backgroundColor: '#16162a',
+    borderWidth: 1,
+    borderColor: '#f0a500',
+    paddingHorizontal: 16,
+    paddingVertical: 7,
+    borderRadius: 20,
+    elevation: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 6,
+  },
+  speakerToastBannerMuted: {
+    borderColor: '#ef4444',
+  },
+  speakerToastText: {
+    color: '#f8fafc',
+    fontSize: 12,
+    fontWeight: '800',
   },
 
   // Prompt Box

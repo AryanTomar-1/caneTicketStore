@@ -845,7 +845,7 @@ export default function DashboardScreen(): React.ReactElement {
 
       {/* ══ 1. RATE BOTTOM SHEET ("दर सेट करें") ══ */}
       <Modal visible={showRateModal} transparent animationType="slide" onRequestClose={() => setShowRateModal(false)}>
-        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
           <TouchableOpacity
             style={styles.modalBackdrop}
             activeOpacity={1}
@@ -1115,7 +1115,7 @@ export default function DashboardScreen(): React.ReactElement {
 
       {/* ══ 4. MILL PAYMENT DATE SET MODAL (Option B) ══ */}
       <Modal visible={showMillDateModal} transparent animationType="slide" onRequestClose={() => setShowMillDateModal(false)}>
-        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
           <TouchableOpacity
             style={styles.modalBackdrop}
             activeOpacity={1}
@@ -1206,7 +1206,7 @@ export default function DashboardScreen(): React.ReactElement {
 
       {/* ══ 5. DATE FILTER MODAL ══ */}
       <Modal visible={showDateModal} transparent animationType="slide" onRequestClose={() => setShowDateModal(false)}>
-        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
           <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setShowDateModal(false)}>
             <TouchableOpacity style={styles.bottomSheetCard} activeOpacity={1} onPress={(e) => e.stopPropagation()}>
               <View style={styles.dragHandle} />
@@ -1494,7 +1494,7 @@ export default function DashboardScreen(): React.ReactElement {
 
       {/* ══ 9. EDIT TICKET MODAL ══ */}
       <Modal visible={!!editTicket} transparent animationType="slide" onRequestClose={() => setEditTicket(null)}>
-        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
           <View style={styles.modalBackdrop}>
             <View style={[styles.bottomSheetCard, { maxHeight: '92%' }]}>
               <View style={styles.dragHandle} />
@@ -1510,7 +1510,12 @@ export default function DashboardScreen(): React.ReactElement {
                 </TouchableOpacity>
               </View>
 
-              <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+              <ScrollView
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+                automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
+                contentContainerStyle={{ paddingBottom: 30 }}
+              >
                 {/* Farmer Code - Locked */}
                 <View style={styles.editField}>
                   <View style={styles.editFieldHeader}>

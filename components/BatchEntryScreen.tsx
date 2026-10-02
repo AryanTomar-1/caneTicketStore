@@ -23,6 +23,7 @@ import {
 import { formatDateInput, isValidDate, todayFormatted, yesterdayFormatted } from '../utils/dateHelpers';
 import { BatchSlipItem, RecentFarmer, Ticket } from '../types';
 import { useSeason } from '../context/SeasonContext';
+import { useKeyboard } from '../hooks/useKeyboard';
 
 // Unique ID helper for staged slips
 const localId = () => Math.random().toString(36).slice(2);
@@ -58,6 +59,9 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
   // ── Loading & Success ─────────────────────────────────────────────────────
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
+
+  const { keyboardHeight } = useKeyboard();
+  const scrollRef = useRef<ScrollView>(null);
 
   const nameRef = useRef<TextInput>(null);
   const fatherRef = useRef<TextInput>(null);
@@ -293,14 +297,16 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
   const totalQty = stagedSlips.reduce((s, slip) => s + (parseFloat(slip.quantity) || 0), 0);
 
   return (
-    <KeyboardAvoidingView
-      style={{ flex: 1 }}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
+    <View style={{ flex: 1 }}>
       <ScrollView
+        ref={scrollRef}
         style={styles.container}
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[
+          styles.content,
+          { paddingBottom: keyboardHeight > 0 ? keyboardHeight + 80 : 40 }
+        ]}
         keyboardShouldPersistTaps="handled"
+        automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
         showsVerticalScrollIndicator={false}
       >
         {/* Success Banner */}
@@ -401,6 +407,9 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
               style={styles.inputField}
               value={fatherName}
               onChangeText={v => { setFatherName(v); setFarmerError(''); }}
+              onFocus={() => {
+                setTimeout(() => scrollRef.current?.scrollTo({ y: 120, animated: true }), 120);
+              }}
               placeholder="पिता का नाम"
               placeholderTextColor="#475569"
               autoCorrect={false}
@@ -454,6 +463,9 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
               style={[styles.inputField, { letterSpacing: 1 }]}
               value={slipDate}
               onChangeText={handleDateChange}
+              onFocus={() => {
+                setTimeout(() => scrollRef.current?.scrollTo({ y: 220, animated: true }), 120);
+              }}
               placeholder="DD/MM/YYYY"
               placeholderTextColor="#475569"
               keyboardType="numeric"
@@ -499,6 +511,9 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
                 style={[styles.inputField, { marginTop: 6 }]}
                 value={ownerName}
                 onChangeText={setOwnerName}
+                onFocus={() => {
+                  setTimeout(() => scrollRef.current?.scrollTo({ y: 320, animated: true }), 120);
+                }}
                 placeholder="मालिक का नाम दर्ज करें"
                 placeholderTextColor="#475569"
                 autoCorrect={false}
@@ -514,6 +529,9 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
               style={[styles.inputField, { fontSize: 16, fontWeight: '800' }]}
               value={quantity}
               onChangeText={v => setQuantity(v.replace(/[^0-9.]/g, ''))}
+              onFocus={() => {
+                setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 120);
+              }}
               placeholder="जैसे: 75.0"
               placeholderTextColor="#475569"
               keyboardType="numeric"
@@ -528,6 +546,9 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
               style={[styles.inputField, { height: 42 }]}
               value={comment}
               onChangeText={setComment}
+              onFocus={() => {
+                setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 120);
+              }}
               placeholder="कोई नोट..."
               placeholderTextColor="#475569"
             />
@@ -621,7 +642,7 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
 
         <View style={{ height: 40 }} />
       </ScrollView>
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 
