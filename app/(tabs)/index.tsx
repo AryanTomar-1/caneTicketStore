@@ -122,6 +122,7 @@ export default function VoiceInputScreen(): React.ReactElement {
   // ── Saving states ──────────────────────────────────────────────────────────
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [savedSuccess, setSavedSuccess] = useState<boolean>(false);
+  const isSavingRef = useRef<boolean>(false);
 
   // ── Animations ─────────────────────────────────────────────────────────────
   const mic = useMicPulse();
@@ -417,6 +418,9 @@ export default function VoiceInputScreen(): React.ReactElement {
 
   // ── Reset Form ─────────────────────────────────────────────────────────────
   const resetForm = (): void => {
+    isSavingRef.current = false;
+    setIsLoading(false);
+    setSavedSuccess(false);
     setCurrentStep(0);
     setFormData({
       farmer_code: '',
@@ -436,6 +440,8 @@ export default function VoiceInputScreen(): React.ReactElement {
 
   // ── Save Ticket to Storage ─────────────────────────────────────────────────
   const handleSaveTicket = async (): Promise<void> => {
+    if (isSavingRef.current || isLoading || savedSuccess) return;
+    isSavingRef.current = true;
     setIsLoading(true);
     try {
       const dup = await checkDuplicate(formData.name.trim(), formData.date.trim());
@@ -444,8 +450,19 @@ export default function VoiceInputScreen(): React.ReactElement {
           'डुप्लीकेट रिकॉर्ड',
           `"${formData.name.trim()}" का ${formData.date.trim()} को रिकॉर्ड पहले से मौजूद है।\nक्या आप फिर भी सहेजना चाहते हैं?`,
           [
-            { text: 'रद्द करें', style: 'cancel', onPress: () => setIsLoading(false) },
-            { text: 'फिर भी सहेजें', style: 'destructive', onPress: performSave },
+            {
+              text: 'रद्द करें',
+              style: 'cancel',
+              onPress: () => {
+                isSavingRef.current = false;
+                setIsLoading(false);
+              },
+            },
+            {
+              text: 'फिर भी सहेजें',
+              style: 'destructive',
+              onPress: performSave,
+            },
           ]
         );
         return;
@@ -454,11 +471,14 @@ export default function VoiceInputScreen(): React.ReactElement {
     } catch (e: any) {
       const msg = e instanceof Error ? e.message : 'सहेजने में समस्या।';
       Alert.alert('त्रुटि', msg);
+      isSavingRef.current = false;
       setIsLoading(false);
     }
   };
 
   const performSave = async () => {
+    isSavingRef.current = true;
+    setIsLoading(true);
     try {
       await saveTicket({
         farmer_code: formData.farmer_code.trim(),
@@ -471,17 +491,19 @@ export default function VoiceInputScreen(): React.ReactElement {
       });
 
       setSavedSuccess(true);
+      setIsLoading(false);
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       speakText('पर्ची सफलतापूर्वक सेव हो गई!');
       await loadRecentFarmers();
       setTimeout(() => {
         setSavedSuccess(false);
+        isSavingRef.current = false;
         resetForm();
       }, 2200);
     } catch (e: any) {
       const msg = e instanceof Error ? e.message : 'सहेजने में समस्या।';
       Alert.alert('त्रुटि', msg);
-    } finally {
+      isSavingRef.current = false;
       setIsLoading(false);
     }
   };
@@ -735,13 +757,25 @@ export default function VoiceInputScreen(): React.ReactElement {
                 <View style={styles.completionActions}>
                   {/* Primary Button */}
                   <TouchableOpacity
-                    style={[styles.primaryActionBtn, styles.savePerchiBtn]}
+                    style={[
+                      styles.primaryActionBtn,
+                      styles.savePerchiBtn,
+                      (isLoading || savedSuccess) && styles.savePerchiBtnDisabled,
+                    ]}
                     onPress={handleSaveTicket}
-                    disabled={isLoading}
+                    disabled={isLoading || savedSuccess}
                     activeOpacity={0.85}
                   >
                     {isLoading ? (
-                      <ActivityIndicator color="#0f172a" />
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                        <ActivityIndicator color="#0f172a" size="small" />
+                        <Text style={styles.primaryActionBtnText}>सहेज रहे हैं...</Text>
+                      </View>
+                    ) : savedSuccess ? (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                        <Ionicons name="checkmark-circle" size={20} color="#0f172a" />
+                        <Text style={styles.primaryActionBtnText}>✓ सहेज लिया गया!</Text>
+                      </View>
                     ) : (
                       <>
                         <Ionicons name="checkmark-done" size={20} color="#0f172a" />
@@ -752,8 +786,9 @@ export default function VoiceInputScreen(): React.ReactElement {
 
                   {/* Secondary Button */}
                   <TouchableOpacity
-                    style={styles.secondaryActionBtn}
+                    style={[styles.secondaryActionBtn, (isLoading || savedSuccess) && { opacity: 0.5 }]}
                     onPress={() => setCurrentStep(0)}
+                    disabled={isLoading || savedSuccess}
                     activeOpacity={0.7}
                   >
                     <Ionicons name="pencil" size={17} color="#f0a500" />
@@ -762,8 +797,9 @@ export default function VoiceInputScreen(): React.ReactElement {
 
                   {/* Reset Button */}
                   <TouchableOpacity
-                    style={styles.restartBtn}
+                    style={[styles.restartBtn, (isLoading || savedSuccess) && { opacity: 0.5 }]}
                     onPress={resetForm}
+                    disabled={isLoading || savedSuccess}
                     activeOpacity={0.7}
                   >
                     <Ionicons name="refresh-outline" size={15} color="#ef4444" />
@@ -1820,6 +1856,9 @@ const styles = StyleSheet.create({
   },
   savePerchiBtn: {
     backgroundColor: '#22c55e',
+  },
+  savePerchiBtnDisabled: {
+    opacity: 0.65,
   },
   primaryActionBtnText: {
     color: '#0f172a',

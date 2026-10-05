@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity,
   FlatList, Modal, Alert, RefreshControl, Animated, PanResponder,
@@ -48,6 +48,26 @@ export default function DashboardScreen(): React.ReactElement {
   const [showOwnerModal, setShowOwnerModal] = useState(false);
   const [uniqueOwners, setUniqueOwners] = useState<string[]>([]);
 
+  // ── Search Debounce & Filter Refs ──────────────────────────────────────────
+  const searchDebounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ticketsRef = useRef(tickets);
+  ticketsRef.current = tickets;
+  const selectedNamesRef = useRef(selectedNames);
+  selectedNamesRef.current = selectedNames;
+  const filterDateRef = useRef(filterDate);
+  filterDateRef.current = filterDate;
+  const selectedOwnersRef = useRef(selectedOwners);
+  selectedOwnersRef.current = selectedOwners;
+
+  // Clean up debounce timer on unmount
+  useEffect(() => {
+    return () => {
+      if (searchDebounceTimer.current) {
+        clearTimeout(searchDebounceTimer.current);
+      }
+    };
+  }, []);
+
   // ── Stats ──────────────────────────────────────────────────────────────────
   const totalQty = filtered.reduce((sum, t) => sum + (parseFloat(String(t.quantity)) || 0), 0);
   const hasFilters = searchText || selectedNames.length > 0 || selectedOwners.length > 0 || filterDate;
@@ -85,6 +105,8 @@ export default function DashboardScreen(): React.ReactElement {
 
   // ── Edit modal ────────────────────────────────────────────────────────────
   const [editTicket, setEditTicket] = useState<Ticket | null>(null);
+  const [isSavingEdit, setIsSavingEdit] = useState<boolean>(false);
+  const isSavingEditRef = useRef<boolean>(false);
   const [editForm, setEditForm] = useState({
     farmer_code: '', name: '', fatherName: '', caneOwner: '', date: '', quantity: '', comment: '',
   });
@@ -97,7 +119,7 @@ export default function DashboardScreen(): React.ReactElement {
   useSpeechRecognitionEvent('result', (event) => {
     if (!isFocused) return;
     const result = event.results[0]?.transcript ?? '';
-    if (result) handleSearch(result);
+    if (result) handleSearch(result, true);
   });
   useSpeechRecognitionEvent('error', () => { if (!isFocused) return; setIsSearchListening(false); mic.stop(); });
 
@@ -142,6 +164,10 @@ export default function DashboardScreen(): React.ReactElement {
     overrideNames?: string[],
     overrideDate?: string,
   ) => {
+    if (searchDebounceTimer.current) {
+      clearTimeout(searchDebounceTimer.current);
+      searchDebounceTimer.current = null;
+    }
     const allData = await getAllTickets();
     const ownersToUse = overrideOwners ?? selectedOwners;
     const searchToUse = overrideSearch ?? searchText;
@@ -217,9 +243,33 @@ export default function DashboardScreen(): React.ReactElement {
     setFiltered(result);
   };
 
-  const handleSearch = (text: string) => {
+  const handleSearch = (text: string, immediate = false) => {
     setSearchText(text);
-    applyFilters(tickets, text, selectedNames, filterDate, selectedOwners);
+
+    if (searchDebounceTimer.current) {
+      clearTimeout(searchDebounceTimer.current);
+      searchDebounceTimer.current = null;
+    }
+
+    if (immediate || !text.trim()) {
+      applyFilters(
+        ticketsRef.current,
+        text,
+        selectedNamesRef.current,
+        filterDateRef.current,
+        selectedOwnersRef.current
+      );
+    } else {
+      searchDebounceTimer.current = setTimeout(() => {
+        applyFilters(
+          ticketsRef.current,
+          text,
+          selectedNamesRef.current,
+          filterDateRef.current,
+          selectedOwnersRef.current
+        );
+      }, 300);
+    }
   };
 
   const handleSelectOwner = (owner: string | null) => {
@@ -275,6 +325,10 @@ export default function DashboardScreen(): React.ReactElement {
   };
 
   const clearFilters = () => {
+    if (searchDebounceTimer.current) {
+      clearTimeout(searchDebounceTimer.current);
+      searchDebounceTimer.current = null;
+    }
     setSearchText('');
     setSelectedNames([]);
     setFilterDate('');
@@ -412,7 +466,7 @@ export default function DashboardScreen(): React.ReactElement {
   };
 
   const handleEditSave = async () => {
-    if (!editTicket) return;
+    if (!editTicket || isSavingEditRef.current) return;
     const { name, fatherName, caneOwner, date, quantity, comment } = editForm;
     const farmer_code = editTicket.farmer_code;
 
@@ -434,10 +488,18 @@ export default function DashboardScreen(): React.ReactElement {
     if (isNaN(qtyNum)) { Alert.alert('गलत मात्रा', 'कृपया सही संख्या दर्ज करें।'); return; }
     if (qtyNum <= 0) { Alert.alert('गलत मात्रा', 'मात्रा 0 से अधिक होनी चाहिए।'); return; }
 
-    const dup = await checkDuplicate(name.trim(), date.trim(), editTicket.id);
-    if (dup) { Alert.alert('डुप्लीकेट', `"${name.trim()}" का ${date.trim()} को रिकॉर्ड पहले से मौजूद है।`); return; }
+    isSavingEditRef.current = true;
+    setIsSavingEdit(true);
 
     try {
+      const dup = await checkDuplicate(name.trim(), date.trim(), editTicket.id);
+      if (dup) {
+        Alert.alert('डुप्लीकेट', `"${name.trim()}" का ${date.trim()} को रिकॉर्ड पहले से मौजूद है।`);
+        isSavingEditRef.current = false;
+        setIsSavingEdit(false);
+        return;
+      }
+
       await updateTicket(editTicket.id, {
         farmer_code,
         name: name.trim(),
@@ -452,6 +514,9 @@ export default function DashboardScreen(): React.ReactElement {
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (e: any) {
       Alert.alert('त्रुटि', e instanceof Error ? e.message : 'अपडेट नहीं हो सका।');
+    } finally {
+      isSavingEditRef.current = false;
+      setIsSavingEdit(false);
     }
   };
 
@@ -719,7 +784,7 @@ export default function DashboardScreen(): React.ReactElement {
           autoCorrect={false}
         />
         {searchText ? (
-          <TouchableOpacity onPress={() => handleSearch('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <TouchableOpacity onPress={() => handleSearch('', true)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
             <Ionicons name="close-circle" size={18} color="#94a3b8" />
           </TouchableOpacity>
         ) : null}
@@ -825,7 +890,8 @@ export default function DashboardScreen(): React.ReactElement {
         data={filtered}
         keyExtractor={item => item.id}
         renderItem={renderTicket}
-        ListHeaderComponent={renderDashboardHeader}
+        ListHeaderComponent={renderDashboardHeader()}
+        keyboardShouldPersistTaps="handled"
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -1708,10 +1774,15 @@ export default function DashboardScreen(): React.ReactElement {
                   <Text style={styles.sheetBtnCancelText}>रद्द करें</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.sheetBtn, styles.sheetBtnSave]}
+                  style={[styles.sheetBtn, styles.sheetBtnSave, isSavingEdit && { opacity: 0.6 }]}
                   onPress={handleEditSave}
+                  disabled={isSavingEdit}
                 >
-                  <Text style={styles.sheetBtnSaveText}>सहेजें ✓</Text>
+                  {isSavingEdit ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text style={styles.sheetBtnSaveText}>सहेजें ✓</Text>
+                  )}
                 </TouchableOpacity>
               </View>
             </View>
