@@ -30,6 +30,7 @@ import { useMicPulse, useSpeakerPulse } from '../../hooks/useMicPulse';
 import { useKeyboard } from '../../hooks/useKeyboard';
 import { FormData, RecentFarmer } from '../../types';
 import { formatDateInput, isValidDate, todayFormatted, yesterdayFormatted } from '../../utils/dateHelpers';
+import { sanitizeComment, sanitizeFarmerCode, sanitizeName, sanitizeQuantity } from '../../utils/inputSanitizers';
 import { checkDuplicate, getRecentFarmers, getTicketByFarmer_code, saveTicket } from '../../utils/storage';
 
 export default function VoiceInputScreen(): React.ReactElement {
@@ -213,8 +214,11 @@ export default function VoiceInputScreen(): React.ReactElement {
   const cleanForStep = (text: string, stepIndex: number): string => {
     if (stepIndex >= STEPS.length) return text;
     const key = STEPS[stepIndex].key;
+    if (key === 'farmer_code') return sanitizeFarmerCode(text);
+    if (key === 'name' || key === 'fatherName' || key === 'caneOwner') return sanitizeName(text);
+    if (key === 'quantity') return sanitizeQuantity(text);
     if (key === 'date') return formatDateInput(text.replace(/\D/g, ''));
-    if (key === 'quantity') return text.replace(/[^0-9.]/g, '');
+    if (key === 'comment') return sanitizeComment(text);
     return text.trim();
   };
 
@@ -308,8 +312,21 @@ export default function VoiceInputScreen(): React.ReactElement {
   };
 
   const handleInputChange = (text: string): void => {
-    if (currentStep < STEPS.length && STEPS[currentStep].key === 'date') {
+    if (currentStep >= STEPS.length) {
+      setInputValue(text);
+      return;
+    }
+    const key = STEPS[currentStep].key;
+    if (key === 'date') {
       handleDateChange(text);
+    } else if (key === 'farmer_code') {
+      setInputValue(sanitizeFarmerCode(text));
+    } else if (key === 'name' || key === 'fatherName' || key === 'caneOwner') {
+      setInputValue(sanitizeName(text));
+    } else if (key === 'quantity') {
+      setInputValue(sanitizeQuantity(text));
+    } else if (key === 'comment') {
+      setInputValue(sanitizeComment(text));
     } else {
       setInputValue(text);
     }
@@ -843,12 +860,13 @@ export default function VoiceInputScreen(): React.ReactElement {
                           <TextInput
                             style={styles.mainInput}
                             value={inputValue}
-                            onChangeText={setInputValue}
+                            onChangeText={v => setInputValue(sanitizeName(v))}
                             onFocus={() => {
                               setTimeout(() => mainScrollRef.current?.scrollToEnd({ animated: true }), 120);
                             }}
                             placeholder="मालिक का नाम लिखें या बोलें..."
                             placeholderTextColor="#475569"
+                            maxLength={50}
                             autoFocus
                             returnKeyType="done"
                             onSubmitEditing={handleNext}
@@ -933,7 +951,7 @@ export default function VoiceInputScreen(): React.ReactElement {
                         <TextInput
                           style={[styles.mainInput, styles.multilineInput]}
                           value={inputValue}
-                          onChangeText={setInputValue}
+                          onChangeText={v => setInputValue(sanitizeComment(v))}
                           onFocus={() => {
                             setTimeout(() => mainScrollRef.current?.scrollToEnd({ animated: true }), 120);
                           }}
@@ -942,6 +960,7 @@ export default function VoiceInputScreen(): React.ReactElement {
                           multiline
                           numberOfLines={3}
                           textAlignVertical="top"
+                          maxLength={200}
                         />
                         <Animated.View style={{ transform: [{ scale: mic.anim }] }}>
                           <View
@@ -979,6 +998,15 @@ export default function VoiceInputScreen(): React.ReactElement {
                         placeholder={currentStepDef.placeholder}
                         placeholderTextColor="#475569"
                         keyboardType={currentStepDef.keyboardType}
+                        maxLength={
+                          currentStepDef.key === 'farmer_code'
+                            ? 20
+                            : currentStepDef.key === 'name' || currentStepDef.key === 'fatherName'
+                            ? 50
+                            : currentStepDef.key === 'quantity'
+                            ? 8
+                            : 200
+                        }
                         autoCorrect={false}
                         returnKeyType="done"
                         onSubmitEditing={handleNext}

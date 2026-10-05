@@ -18,7 +18,11 @@ import {
   getCaneRate, setCaneRate,
 } from '../../utils/storage';
 import { exportBackupToFile, importBackupFromFile } from '../../utils/backup';
-import { formatDateInput, isValidDate, sanitizeFilterDate, compareDDMMYYYY, todayFormatted, yesterdayFormatted } from '../../utils/dateHelpers';
+import {
+  formatDateInput, isValidDate, sanitizeFilterDate, compareDDMMYYYY, todayFormatted, yesterdayFormatted,
+  validateFilterDate, matchFilterDate,
+} from '../../utils/dateHelpers';
+import { sanitizeComment, sanitizeName, sanitizeQuantity, sanitizeRate, sanitizeSearchText } from '../../utils/inputSanitizers';
 import { useMicPulse } from '../../hooks/useMicPulse';
 import { Ticket, MillPaymentSettings } from '../../types';
 import SeasonSelector from '../../components/SeasonSelector';
@@ -201,7 +205,7 @@ export default function DashboardScreen(): React.ReactElement {
         t.farmer_code?.toLowerCase().includes(q)
       );
     }
-    if (date.trim()) result = result.filter(t => t.date?.includes(date.trim()));
+    if (date.trim()) result = result.filter(t => matchFilterDate(t.date, date.trim()));
     result.sort((a, b) => {
       const parseDate = (d: string) => {
         if (!d) return 0;
@@ -262,6 +266,10 @@ export default function DashboardScreen(): React.ReactElement {
 
   const handleDateFilter = (text: string) => {
     const sanitized = sanitizeFilterDate(text);
+    const validation = validateFilterDate(sanitized);
+    if (!validation.isValid) {
+      return;
+    }
     setFilterDate(sanitized);
     applyFilters(tickets, searchText, selectedNames, sanitized, selectedOwners);
   };
@@ -704,9 +712,10 @@ export default function DashboardScreen(): React.ReactElement {
         <TextInput
           style={styles.searchInput}
           value={searchText}
-          onChangeText={handleSearch}
+          onChangeText={v => handleSearch(sanitizeSearchText(v))}
           placeholder={isSearchListening ? 'सुन रहा है...' : 'नाम / किसान कोड खोजें...'}
           placeholderTextColor={isSearchListening ? '#ef4444' : '#64748b'}
+          maxLength={50}
           autoCorrect={false}
         />
         {searchText ? (
@@ -889,10 +898,11 @@ export default function DashboardScreen(): React.ReactElement {
                 <TextInput
                   style={styles.rateNumericInput}
                   value={rateInput}
-                  onChangeText={(v) => { if (v === '' || /^\d*\.?\d*$/.test(v)) setRateInput(v); }}
+                  onChangeText={(v) => setRateInput(sanitizeRate(v))}
                   placeholder="0.00"
                   placeholderTextColor="#475569"
                   keyboardType="numeric"
+                  maxLength={7}
                   autoFocus
                 />
                 <Text style={styles.rateInputSuffix}>/ क्विंटल</Text>
@@ -1237,6 +1247,15 @@ export default function DashboardScreen(): React.ReactElement {
                   </Text>
                 </TouchableOpacity>
 
+                <TouchableOpacity
+                  style={[styles.presetChip, tempDateFilter === yesterdayFormatted() && styles.presetChipActive]}
+                  onPress={() => setTempDateFilter(yesterdayFormatted())}
+                >
+                  <Text style={[styles.presetChipText, tempDateFilter === yesterdayFormatted() && styles.presetChipActiveText]}>
+                    📅 कल ({yesterdayFormatted()})
+                  </Text>
+                </TouchableOpacity>
+
                 {tempDateFilter ? (
                   <TouchableOpacity
                     style={[styles.presetChip, { borderColor: 'rgba(239,68,68,0.4)', backgroundColor: 'rgba(239,68,68,0.1)' }]}
@@ -1247,37 +1266,61 @@ export default function DashboardScreen(): React.ReactElement {
                 ) : null}
               </View>
 
-              <TextInput
-                style={[styles.dateInputField, { borderColor: '#f0a500' }]}
-                value={tempDateFilter}
-                onChangeText={setTempDateFilter}
-                placeholder="जैसे: 2025 या 03/2025 या 15"
-                placeholderTextColor="#475569"
-                keyboardType="default"
-                autoFocus
-              />
+              {(() => {
+                const dateValidation = validateFilterDate(tempDateFilter);
+                const hasError = !dateValidation.isValid;
+                const hasHint = !!dateValidation.hint && !!tempDateFilter.trim();
+                const borderColor = hasError ? '#ef4444' : hasHint ? '#22c55e' : '#f0a500';
 
-              <Text style={styles.inputHelperText}>
-                {tempDateFilter ? `चयनित: ${tempDateFilter}` : 'उदाहरण: 2025 या 03/2025 या 15'}
-              </Text>
+                return (
+                  <>
+                    <TextInput
+                      style={[styles.dateInputField, { borderColor }]}
+                      value={tempDateFilter}
+                      onChangeText={(text) => setTempDateFilter(sanitizeFilterDate(text))}
+                      placeholder="जैसे: 03/2026, 01/12, 15 या 2026"
+                      placeholderTextColor="#475569"
+                      keyboardType="numbers-and-punctuation"
+                      maxLength={10}
+                      autoFocus
+                    />
 
-              <View style={styles.sheetButtonRow}>
-                <TouchableOpacity
-                  style={[styles.sheetBtn, styles.sheetBtnCancel]}
-                  onPress={() => setShowDateModal(false)}
-                >
-                  <Text style={styles.sheetBtnCancelText}>रद्द करें</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.sheetBtn, styles.sheetBtnSave]}
-                  onPress={() => {
-                    handleDateFilter(tempDateFilter);
-                    setShowDateModal(false);
-                  }}
-                >
-                  <Text style={styles.sheetBtnSaveText}>✓ फ़िल्टर लगाएं</Text>
-                </TouchableOpacity>
-              </View>
+                    {hasError ? (
+                      <Text style={[styles.errorText, { textAlign: 'center', marginBottom: 12 }]}>
+                        ⚠️ {dateValidation.error}
+                      </Text>
+                    ) : hasHint ? (
+                      <Text style={[styles.inputHelperText, { color: '#22c55e', fontWeight: '700', marginBottom: 12 }]}>
+                        ✓ {dateValidation.hint}
+                      </Text>
+                    ) : (
+                      <Text style={styles.inputHelperText}>
+                        उदाहरण: 03/2026 (महीना/साल) या 01/12 (दिन/महीना) या 2026
+                      </Text>
+                    )}
+
+                    <View style={styles.sheetButtonRow}>
+                      <TouchableOpacity
+                        style={[styles.sheetBtn, styles.sheetBtnCancel]}
+                        onPress={() => setShowDateModal(false)}
+                      >
+                        <Text style={styles.sheetBtnCancelText}>रद्द करें</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.sheetBtn, styles.sheetBtnSave, hasError && { opacity: 0.5 }]}
+                        disabled={hasError}
+                        onPress={() => {
+                          if (hasError) return;
+                          handleDateFilter(tempDateFilter);
+                          setShowDateModal(false);
+                        }}
+                      >
+                        <Text style={styles.sheetBtnSaveText}>✓ फ़िल्टर लगाएं</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </>
+                );
+              })()}
             </TouchableOpacity>
           </TouchableOpacity>
         </KeyboardAvoidingView>
@@ -1538,9 +1581,10 @@ export default function DashboardScreen(): React.ReactElement {
                   <TextInput
                     style={styles.editTextInput}
                     value={editForm.name}
-                    onChangeText={val => setEditForm(prev => ({ ...prev, name: val }))}
+                    onChangeText={val => setEditForm(prev => ({ ...prev, name: sanitizeName(val) }))}
                     placeholder="किसान का नाम"
                     placeholderTextColor="#475569"
+                    maxLength={50}
                     autoCorrect={false}
                   />
                 </View>
@@ -1551,9 +1595,10 @@ export default function DashboardScreen(): React.ReactElement {
                   <TextInput
                     style={styles.editTextInput}
                     value={editForm.fatherName}
-                    onChangeText={val => setEditForm(prev => ({ ...prev, fatherName: val }))}
+                    onChangeText={val => setEditForm(prev => ({ ...prev, fatherName: sanitizeName(val) }))}
                     placeholder="पिता का नाम"
                     placeholderTextColor="#475569"
+                    maxLength={50}
                     autoCorrect={false}
                   />
                 </View>
@@ -1582,9 +1627,10 @@ export default function DashboardScreen(): React.ReactElement {
                   <TextInput
                     style={styles.editTextInput}
                     value={editForm.caneOwner}
-                    onChangeText={val => setEditForm(prev => ({ ...prev, caneOwner: val }))}
+                    onChangeText={val => setEditForm(prev => ({ ...prev, caneOwner: sanitizeName(val) }))}
                     placeholder="मालिक का नाम या मेरा गन्ना"
                     placeholderTextColor="#475569"
+                    maxLength={50}
                     autoCorrect={false}
                   />
                 </View>
@@ -1631,8 +1677,9 @@ export default function DashboardScreen(): React.ReactElement {
                   <TextInput
                     style={styles.editTextInput}
                     value={editForm.quantity}
-                    onChangeText={val => setEditForm(prev => ({ ...prev, quantity: val.replace(/[^0-9.]/g, '') }))}
+                    onChangeText={val => setEditForm(prev => ({ ...prev, quantity: sanitizeQuantity(val) }))}
                     keyboardType="numeric"
+                    maxLength={8}
                     placeholder="जैसे: 75.00"
                     placeholderTextColor="#475569"
                   />
@@ -1644,8 +1691,9 @@ export default function DashboardScreen(): React.ReactElement {
                   <TextInput
                     style={[styles.editTextInput, { height: 75, textAlignVertical: 'top' }]}
                     value={editForm.comment}
-                    onChangeText={val => setEditForm(prev => ({ ...prev, comment: val }))}
+                    onChangeText={val => setEditForm(prev => ({ ...prev, comment: sanitizeComment(val) }))}
                     multiline
+                    maxLength={200}
                     placeholder="कोई टिप्पणी या नोट..."
                     placeholderTextColor="#475569"
                   />

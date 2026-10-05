@@ -12,6 +12,9 @@
     "preview": {
       "distribution": "internal",
       "channel": "preview",
+      "env": {
+        "APP_ENV": "preview"
+      },
       "android": {
         "buildType": "apk"
       }

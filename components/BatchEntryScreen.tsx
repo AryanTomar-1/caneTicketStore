@@ -21,6 +21,7 @@ import {
   saveBatchTickets,
 } from '../utils/storage';
 import { formatDateInput, isValidDate, todayFormatted, yesterdayFormatted } from '../utils/dateHelpers';
+import { sanitizeComment, sanitizeFarmerCode, sanitizeName, sanitizeQuantity } from '../utils/inputSanitizers';
 import { BatchSlipItem, RecentFarmer, Ticket } from '../types';
 import { useSeason } from '../context/SeasonContext';
 import { useKeyboard } from '../hooks/useKeyboard';
@@ -364,7 +365,7 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
                 style={styles.inputField}
                 value={farmerCode}
                 onChangeText={v => {
-                  setFarmerCode(v);
+                  setFarmerCode(sanitizeFarmerCode(v));
                   setFarmerLookupDone(false);
                   setFarmerError('');
                 }}
@@ -372,6 +373,7 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
                 placeholder="जैसे: 08"
                 placeholderTextColor="#475569"
                 keyboardType="default"
+                maxLength={20}
                 returnKeyType="next"
                 onSubmitEditing={() => nameRef.current?.focus()}
               />
@@ -389,10 +391,11 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
                 ref={nameRef}
                 style={styles.inputField}
                 value={farmerName}
-                onChangeText={v => { setFarmerName(v); setFarmerError(''); }}
+                onChangeText={v => { setFarmerName(sanitizeName(v)); setFarmerError(''); }}
                 placeholder="किसान का नाम"
                 placeholderTextColor="#475569"
                 autoCorrect={false}
+                maxLength={50}
                 returnKeyType="next"
                 onSubmitEditing={() => fatherRef.current?.focus()}
               />
@@ -406,13 +409,14 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
               ref={fatherRef}
               style={styles.inputField}
               value={fatherName}
-              onChangeText={v => { setFatherName(v); setFarmerError(''); }}
+              onChangeText={v => { setFatherName(sanitizeName(v)); setFarmerError(''); }}
               onFocus={() => {
                 setTimeout(() => scrollRef.current?.scrollTo({ y: 120, animated: true }), 120);
               }}
               placeholder="पिता का नाम"
               placeholderTextColor="#475569"
               autoCorrect={false}
+              maxLength={50}
               returnKeyType="done"
             />
           </View>
@@ -510,13 +514,14 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
               <TextInput
                 style={[styles.inputField, { marginTop: 6 }]}
                 value={ownerName}
-                onChangeText={setOwnerName}
+                onChangeText={v => setOwnerName(sanitizeName(v))}
                 onFocus={() => {
                   setTimeout(() => scrollRef.current?.scrollTo({ y: 320, animated: true }), 120);
                 }}
                 placeholder="मालिक का नाम दर्ज करें"
                 placeholderTextColor="#475569"
                 autoCorrect={false}
+                maxLength={50}
               />
             )}
           </View>
@@ -528,13 +533,14 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
               ref={qtyRef}
               style={[styles.inputField, { fontSize: 16, fontWeight: '800' }]}
               value={quantity}
-              onChangeText={v => setQuantity(v.replace(/[^0-9.]/g, ''))}
+              onChangeText={v => setQuantity(sanitizeQuantity(v))}
               onFocus={() => {
                 setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 120);
               }}
               placeholder="जैसे: 75.0"
               placeholderTextColor="#475569"
               keyboardType="numeric"
+              maxLength={8}
               returnKeyType="done"
             />
           </View>
@@ -545,12 +551,13 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
             <TextInput
               style={[styles.inputField, { height: 42 }]}
               value={comment}
-              onChangeText={setComment}
+              onChangeText={v => setComment(sanitizeComment(v))}
               onFocus={() => {
                 setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 120);
               }}
               placeholder="कोई नोट..."
               placeholderTextColor="#475569"
+              maxLength={200}
             />
           </View>
 
