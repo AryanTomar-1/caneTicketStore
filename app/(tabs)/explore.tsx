@@ -634,11 +634,13 @@ export default function DashboardScreen(): React.ReactElement {
     }
   };
 
-  // ── WhatsApp share ────────────────────────────────────────────────────────
+  // ── WhatsApp & SMS share ──────────────────────────────────────────────────
   const shareOnWhatsApp = (ticket: Ticket) => {
     const rate = !isNaN(priceNum) && pricePerQty ? `\n💰 अनुमानित राशि (@ ₹${pricePerQty}): ₹${(ticket.quantity * priceNum).toFixed(2)}` : '';
+    const PLAY_STORE_URL = 'https://play.google.com/store/apps/details?id=com.aryan_tomar.SmartKissan';
     const msg =
-      `🌾 *गन्ना टिकट / Cane Ticket*\n` +
+      `🌾 *गन्ना टिकट पर्ची / Cane Ticket*\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
       `🆔 किसान कोड: ${ticket.farmer_code}\n` +
       `👤 नाम: ${ticket.name}\n` +
       `👨 पिता: ${ticket.fatherName}\n` +
@@ -647,7 +649,11 @@ export default function DashboardScreen(): React.ReactElement {
       `⚖️ मात्रा: ${parseFloat(String(ticket.quantity)).toFixed(2)} क्विंटल` +
       rate +
       (ticket.comment ? `\n📝 टिप्पणी: ${ticket.comment}` : '') +
-      `\n\n_${formatDateTime(ticket.createdAt)}_\n_SmartKissan App_`;
+      `\n━━━━━━━━━━━━━━━━━━━━\n` +
+      `🕒 _${formatDateTime(ticket.createdAt)}_\n\n` +
+      `📲 *Smart Kissan ऐप से भेजा गया*\n` +
+      `गन्ना पर्चियों और वजन का हिसाब रखने के लिए ऐप डाउनलोड करें:\n` +
+      `👉 ${PLAY_STORE_URL}`;
     const url = `whatsapp://send?text=${encodeURIComponent(msg)}`;
     Linking.canOpenURL(url).then(supported => {
       if (supported) Linking.openURL(url);

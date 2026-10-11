@@ -12,8 +12,8 @@ import {
 
 interface PlayStoreUpdateModalProps {
   visible: boolean;
-  currentVersion: string;
-  latestVersion: string;
+  currentVersion?: string;
+  latestVersion?: string;
   releaseNotes?: string;
   isForceUpdate?: boolean;
   onUpdate: () => void;
@@ -24,8 +24,8 @@ const { width } = Dimensions.get('window');
 
 export default function PlayStoreUpdateModal({
   visible,
-  currentVersion,
-  latestVersion,
+  currentVersion = '1.0.0',
+  latestVersion = '1.0.1',
   releaseNotes,
   isForceUpdate = false,
   onUpdate,
@@ -33,14 +33,26 @@ export default function PlayStoreUpdateModal({
 }: PlayStoreUpdateModalProps) {
   if (!visible) return null;
 
+  const handleDismiss = () => {
+    try {
+      if (!isForceUpdate) {
+        onDismiss();
+      }
+    } catch {}
+  };
+
+  const handleUpdate = () => {
+    try {
+      onUpdate();
+    } catch {}
+  };
+
   return (
     <Modal
       transparent
       animationType="fade"
       visible={visible}
-      onRequestClose={() => {
-        if (!isForceUpdate) onDismiss();
-      }}
+      onRequestClose={handleDismiss}
     >
       <View style={styles.overlay}>
         <View style={styles.card}>
@@ -55,9 +67,9 @@ export default function PlayStoreUpdateModal({
 
           {/* Version Pill */}
           <View style={styles.versionPill}>
-            <Text style={styles.versionOld}>v{currentVersion}</Text>
+            <Text style={styles.versionOld}>v{currentVersion || '1.0.0'}</Text>
             <Text style={styles.versionArrow}> ➔ </Text>
-            <Text style={styles.versionNew}>v{latestVersion}</Text>
+            <Text style={styles.versionNew}>v{latestVersion || '1.0.1'}</Text>
           </View>
 
           {/* Description */}
@@ -66,7 +78,7 @@ export default function PlayStoreUpdateModal({
           </Text>
 
           {/* Release Notes */}
-          {Boolean(releaseNotes) && (
+          {Boolean(releaseNotes && releaseNotes.trim()) && (
             <View style={styles.notesBox}>
               <Text style={styles.notesTitle}>📌 इस वर्शन में नया क्या है:</Text>
               <ScrollView style={{ maxHeight: 90 }} showsVerticalScrollIndicator={false}>
@@ -80,7 +92,7 @@ export default function PlayStoreUpdateModal({
             <TouchableOpacity
               style={styles.updateBtn}
               activeOpacity={0.8}
-              onPress={onUpdate}
+              onPress={handleUpdate}
             >
               <Text style={styles.updateBtnText}>अभी अपडेट करें (Update Now)</Text>
             </TouchableOpacity>
@@ -89,7 +101,7 @@ export default function PlayStoreUpdateModal({
               <TouchableOpacity
                 style={styles.laterBtn}
                 activeOpacity={0.7}
-                onPress={onDismiss}
+                onPress={handleDismiss}
               >
                 <Text style={styles.laterBtnText}>बाद में (Later)</Text>
               </TouchableOpacity>
