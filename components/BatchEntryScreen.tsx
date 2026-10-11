@@ -24,6 +24,7 @@ import { formatDateInput, isValidDate, todayFormatted, yesterdayFormatted } from
 import { sanitizeComment, sanitizeFarmerCode, sanitizeName, sanitizeQuantity } from '../utils/inputSanitizers';
 import { BatchSlipItem, RecentFarmer, Ticket } from '../types';
 import { useSeason } from '../context/SeasonContext';
+import { useBackup } from '../context/BackupContext';
 import { useKeyboard } from '../hooks/useKeyboard';
 
 // Unique ID helper for staged slips
@@ -35,6 +36,7 @@ interface BatchEntryProps {
 
 export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
   const { selectedSeason } = useSeason();
+  const { enqueueSave } = useBackup();
 
   // ── Farmer Master (Entered ONCE for the batch) ─────────────────────────────
   const [farmerCode, setFarmerCode] = useState('');
@@ -232,31 +234,22 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
   };
 
-  // ── Submit All Staged Slips ───────────────────────────────────────────────
+  // ── Submit All Staged Slips (Directly save in one click) ──────────────────
   const handleSubmitAll = async () => {
+    if (isSubmitting) return;
     if (!validateFarmer()) return;
     if (stagedSlips.length === 0) {
       Alert.alert('कोई पर्ची नहीं', 'पहले कम से कम एक पर्ची जोड़ें।');
       return;
     }
 
-    Alert.alert(
-      'सभी पर्चियां सेव करें?',
-      `${farmerName.trim()} (कोड: ${farmerCode.trim()}) के लिए कुल ${stagedSlips.length} पर्चियां (${totalQty.toFixed(1)} क्विंटल) सेव की जाएंगी।`,
-      [
-        { text: 'रद्द करें', style: 'cancel' },
-        {
-          text: `हाँ, ${stagedSlips.length} पर्चियां सेव करें`,
-          onPress: performSubmit,
-        },
-      ]
-    );
+    await performSubmit();
   };
 
   const performSubmit = async () => {
     setIsSubmitting(true);
     try {
-      await saveBatchTickets({
+      const savedTickets = await saveBatchTickets({
         farmer_code: farmerCode.trim(),
         name: farmerName.trim(),
         fatherName: fatherName.trim(),
@@ -267,6 +260,10 @@ export default function BatchEntryScreen({ onSaved }: BatchEntryProps) {
           comment: s.comment,
         })),
       });
+
+      if (Array.isArray(savedTickets)) {
+        savedTickets.forEach(t => enqueueSave(t.id, t.seasonId).catch(() => {}));
+      }
 
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setSavedSuccess(true);
@@ -967,10 +964,10 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   slipCommentText: {
-    color: '#64748b',
-    fontSize: 10,
+    color: '#cbd5e1',
+    fontSize: 11,
     marginTop: 2,
-    fontStyle: 'italic',
+    fontWeight: '700',
   },
   slipQtyBox: {
     alignItems: 'flex-end',

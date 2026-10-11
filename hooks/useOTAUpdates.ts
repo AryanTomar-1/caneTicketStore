@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import * as Updates from 'expo-updates';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -40,15 +40,17 @@ export const useOTAUpdates = () => {
   const setStatus = (status: OTAStatus, errorMessage: string | null = null) =>
     setState({ status, lastChecked: new Date(), errorMessage });
 
+  const isBusyRef = useRef(false);
+
   // ── Check & download silently ─────────────────────────────────────────────
 
   const checkAndDownload = useCallback(async () => {
     // Never run in dev – Updates API not available in dev client / Expo Go
     if (__DEV__) return;
 
-    // Expo updates also exposes Updates.isEmbeddedLaunch / channel info
-    // – just silently skip if we're already checking or downloading
-    if (state.status === 'checking' || state.status === 'downloading') return;
+    // Skip if already checking or downloading
+    if (isBusyRef.current) return;
+    isBusyRef.current = true;
 
     try {
       setStatus('checking');
@@ -69,8 +71,10 @@ export const useOTAUpdates = () => {
       const msg = err instanceof Error ? err.message : 'OTA check failed';
       setStatus('error', msg);
       console.warn('[OTA] Update check/download failed:', msg);
+    } finally {
+      isBusyRef.current = false;
     }
-  }, []); // empty deps – stable reference
+  }, []);
 
   // ── Apply / reload ────────────────────────────────────────────────────────
 
@@ -86,11 +90,10 @@ export const useOTAUpdates = () => {
   // ── Auto-check on mount ───────────────────────────────────────────────────
 
   useEffect(() => {
-    // Small delay so the app finishes splash/layout render first
-    const t = setTimeout(checkAndDownload, 3000);
+    // Quick delay on mount so OTA banner appears first on app launch
+    const t = setTimeout(checkAndDownload, 400);
     return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [checkAndDownload]);
 
   return {
     otaStatus: state.status,

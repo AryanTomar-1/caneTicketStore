@@ -1,13 +1,20 @@
+import * as WebBrowser from 'expo-web-browser';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import 'react-native-reanimated';
+
+WebBrowser.maybeCompleteAuthSession();
 import { SeasonProvider } from '../context/SeasonContext';
+import { BackupProvider, useBackup } from '../context/BackupContext';
 import { cleanupOldSeasons } from '../utils/storage';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Animated, Easing, Platform, StatusBar as StatusBarRN } from 'react-native';
 import { useOTAUpdates } from '../hooks/useOTAUpdates';
+import { usePlayStoreUpdate } from '../hooks/usePlayStoreUpdate';
+import PlayStoreUpdateModal from '../components/PlayStoreUpdateModal';
 import { useRef } from 'react';
+import BackupSetupScreen from './backup-setup';
 
 export const unstable_settings = { anchor: '(tabs)' };
 
@@ -30,14 +37,27 @@ function OTABanner({ status, onApply, onCheck }: {
 
   // Slide in when status changes to something visible
   const visible = status === 'ready' || status === 'downloading' || status === 'checking';
+  const [shouldRender, setShouldRender] = useState(visible);
 
   useEffect(() => {
-    Animated.timing(slideAnim, {
-      toValue: visible ? 0 : -(topInset + 120),
-      duration: 350,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
-    }).start();
+    if (visible) {
+      setShouldRender(true);
+      Animated.timing(slideAnim, {
+        toValue: 0,
+        duration: 350,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }).start();
+    } else {
+      Animated.timing(slideAnim, {
+        toValue: -(topInset + 120),
+        duration: 350,
+        easing: Easing.in(Easing.cubic),
+        useNativeDriver: true,
+      }).start(() => {
+        setShouldRender(false);
+      });
+    }
   }, [visible, topInset]);
 
   // Animated pulsing dot for downloading/checking
@@ -58,7 +78,7 @@ function OTABanner({ status, onApply, onCheck }: {
 
   const dotOpacity = dotAnim;
 
-  if (!visible) return null;
+  if (!shouldRender) return null;
 
   return (
     <Animated.View style={[bannerStyles.container, { transform: [{ translateY: slideAnim }] }]}>
@@ -125,28 +145,86 @@ const bannerStyles = StyleSheet.create({
   restartText: { color: '#0f0f1e', fontSize: 12, fontWeight: '800' },
 });
 
+// ─── First-Time Setup Gate ────────────────────────────────────────────────────
+
+function AppWithSetupGate() {
+  const { settings } = useBackup();
+  const { otaStatus, checkAndDownload, applyUpdate } = useOTAUpdates();
+  const {
+    isUpdateAvailable,
+    isForceUpdate,
+    currentVersion,
+    latestVersion,
+    releaseNotes,
+    openPlayStore,
+    dismissModal,
+    dismissed,
+  } = usePlayStoreUpdate();
+
+  // null = loading, true = show setup, false = show main app
+  const [showSetup, setShowSetup] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    cleanupOldSeasons();
+  }, []);
+
+  useEffect(() => {
+    // Once settings are loaded from AsyncStorage, decide what to show
+    if (settings !== undefined) {
+      setShowSetup(!settings.setupCompleted);
+    }
+  }, [settings?.setupCompleted]);
+
+  return (
+    <View style={{ flex: 1, backgroundColor: '#0f0f1e' }}>
+      <StatusBar style="light" backgroundColor="#0f0f1e" />
+
+      {/* Screen Content: Loading, Google Mail Sign-in / Setup, or Main App */}
+      {showSetup === null ? (
+        <View style={{ flex: 1, backgroundColor: '#0f0f1e' }} />
+      ) : showSetup ? (
+        <BackupSetupScreen
+          onComplete={() => setShowSetup(false)}
+          showSkip={true}
+        />
+      ) : (
+        <Stack>
+          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          <Stack.Screen name="backup-setup" options={{ headerShown: false }} />
+          <Stack.Screen name="expo-auth-session" options={{ headerShown: false }} />
+        </Stack>
+      )}
+
+      {/* OTA update banner — ALWAYS rendered on top, visible first on app launch */}
+      <OTABanner
+        status={otaStatus}
+        onApply={applyUpdate}
+        onCheck={checkAndDownload}
+      />
+
+      {/* Google Play Store In-App Update Modal */}
+      <PlayStoreUpdateModal
+        visible={isUpdateAvailable && !dismissed}
+        currentVersion={currentVersion}
+        latestVersion={latestVersion}
+        releaseNotes={releaseNotes}
+        isForceUpdate={isForceUpdate}
+        onUpdate={openPlayStore}
+        onDismiss={dismissModal}
+      />
+    </View>
+  );
+}
+
 // ─── Root Layout ─────────────────────────────────────────────────────────────
 
 export default function RootLayout() {
-  const { otaStatus, checkAndDownload, applyUpdate } = useOTAUpdates();
-
-  useEffect(() => {
-    cleanupOldSeasons(); // runs silently in background
-  }, []);
-
   return (
     <SafeAreaProvider>
       <SeasonProvider>
-        {/* OTA update banner — slides in from top, invisible in dev mode */}
-        <OTABanner
-          status={otaStatus}
-          onApply={applyUpdate}
-          onCheck={checkAndDownload}
-        />
-        <Stack>
-          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        </Stack>
-        <StatusBar style="light" backgroundColor="#0f0f1e" />
+        <BackupProvider>
+          <AppWithSetupGate />
+        </BackupProvider>
       </SeasonProvider>
     </SafeAreaProvider>
   );
