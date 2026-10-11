@@ -11,6 +11,8 @@ import { cleanupOldSeasons } from '../utils/storage';
 import { useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Animated, Easing, Platform, StatusBar as StatusBarRN } from 'react-native';
 import { useOTAUpdates } from '../hooks/useOTAUpdates';
+import { usePlayStoreUpdate } from '../hooks/usePlayStoreUpdate';
+import PlayStoreUpdateModal from '../components/PlayStoreUpdateModal';
 import { useRef } from 'react';
 import BackupSetupScreen from './backup-setup';
 
@@ -148,6 +150,17 @@ const bannerStyles = StyleSheet.create({
 function AppWithSetupGate() {
   const { settings } = useBackup();
   const { otaStatus, checkAndDownload, applyUpdate } = useOTAUpdates();
+  const {
+    isUpdateAvailable,
+    isForceUpdate,
+    currentVersion,
+    latestVersion,
+    releaseNotes,
+    openPlayStore,
+    dismissModal,
+    dismissed,
+  } = usePlayStoreUpdate();
+
   // null = loading, true = show setup, false = show main app
   const [showSetup, setShowSetup] = useState<boolean | null>(null);
 
@@ -187,6 +200,17 @@ function AppWithSetupGate() {
         status={otaStatus}
         onApply={applyUpdate}
         onCheck={checkAndDownload}
+      />
+
+      {/* Google Play Store In-App Update Modal */}
+      <PlayStoreUpdateModal
+        visible={isUpdateAvailable && !dismissed}
+        currentVersion={currentVersion}
+        latestVersion={latestVersion}
+        releaseNotes={releaseNotes}
+        isForceUpdate={isForceUpdate}
+        onUpdate={openPlayStore}
+        onDismiss={dismissModal}
       />
     </View>
   );
