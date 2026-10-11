@@ -73,8 +73,8 @@ export const sanitizeComment = (val: string): string => {
 
 /**
  * Search Text:
- * - Max 50 characters
+ * - Max 80 characters (accommodates prefixes like 'comment', 'टिप्पणी', etc.)
  */
 export const sanitizeSearchText = (val: string): string => {
-  return val.slice(0, 50);
+  return val.slice(0, 80);
 };

@@ -24,8 +24,10 @@ import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from 'expo-spe
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import BatchEntryScreen from '../../components/BatchEntryScreen';
 import SeasonSelector from '../../components/SeasonSelector';
+import ProfileSidebar from '../../components/ProfileSidebar';
 import { STEPS, Step } from '../../constants/steps';
 import { useSeason } from '../../context/SeasonContext';
+import { useBackup } from '../../context/BackupContext';
 import { useMicPulse, useSpeakerPulse } from '../../hooks/useMicPulse';
 import { useKeyboard } from '../../hooks/useKeyboard';
 import { FormData, RecentFarmer } from '../../types';
@@ -38,6 +40,8 @@ export default function VoiceInputScreen(): React.ReactElement {
   const isFocused = useIsFocused();
   const { selectedSeason } = useSeason();
   const { keyboardHeight } = useKeyboard();
+  const { enqueueSave, syncState, settings: backupSettings } = useBackup();
+  const [showSidebar, setShowSidebar] = useState(false);
   const mainScrollRef = useRef<ScrollView>(null);
 
   // ── Speaker / TTS Audio toggle ─────────────────────────────────────────────
@@ -480,7 +484,7 @@ export default function VoiceInputScreen(): React.ReactElement {
     isSavingRef.current = true;
     setIsLoading(true);
     try {
-      await saveTicket({
+      const savedTicket = await saveTicket({
         farmer_code: formData.farmer_code.trim(),
         name: formData.name.trim(),
         fatherName: formData.fatherName.trim(),
@@ -495,6 +499,11 @@ export default function VoiceInputScreen(): React.ReactElement {
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       speakText('पर्ची सफलतापूर्वक सेव हो गई!');
       await loadRecentFarmers();
+
+      // ── Cloud backup: fire-and-forget, never blocks save ──────────────────
+      // enqueueSave is a no-op if backup is disabled
+      enqueueSave(savedTicket.id, savedTicket.seasonId).catch(() => {});
+
       setTimeout(() => {
         setSavedSuccess(false);
         isSavingRef.current = false;
@@ -507,6 +516,7 @@ export default function VoiceInputScreen(): React.ReactElement {
       setIsLoading(false);
     }
   };
+
 
   const isCompletionScreen = currentStep >= STEPS.length;
   const currentStepDef: Step | undefined = !isCompletionScreen ? STEPS[currentStep] : undefined;
@@ -525,7 +535,28 @@ export default function VoiceInputScreen(): React.ReactElement {
               <Ionicons name="document-text" size={20} color="#f0a500" />
               <Text style={styles.appTitle}>रिकॉर्ड जोड़ें</Text>
             </View>
-            <SeasonSelector prefix="सीजन: " />
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <SeasonSelector prefix="सीजन: " />
+              {/* Profile / Backup Icon */}
+              <TouchableOpacity
+                onPress={() => setShowSidebar(true)}
+                style={styles.profileIconBtn}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="person-circle-outline" size={26} color="#f0a500" />
+                {/* Backup status dot */}
+                {backupSettings.enabled && (
+                  <View style={[
+                    styles.backupDot,
+                    syncState.status === 'idle' ? styles.backupDotGreen :
+                    syncState.status === 'syncing' || syncState.status === 'pending' ? styles.backupDotAmber :
+                    syncState.status === 'failed' || syncState.status === 'auth_required' ? styles.backupDotRed :
+                    styles.backupDotGray
+                  ]} />
+                )}
+              </TouchableOpacity>
+            </View>
           </View>
 
           {/* Speaker Status Toast Notification */}
@@ -1200,6 +1231,9 @@ export default function VoiceInputScreen(): React.ReactElement {
             </View>
           </View>
         </Modal>
+
+        {/* Profile / Backup Sidebar Drawer */}
+        <ProfileSidebar visible={showSidebar} onClose={() => setShowSidebar(false)} />
       </View>
     </KeyboardAvoidingView>
   );
@@ -1986,5 +2020,33 @@ const styles = StyleSheet.create({
     color: '#0f172a',
     fontSize: 14,
     fontWeight: '900',
+  },
+  profileIconBtn: {
+    position: 'relative',
+    padding: 2,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  backupDot: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    borderWidth: 1.5,
+    borderColor: '#0d0d1a',
+  },
+  backupDotGreen: {
+    backgroundColor: '#22c55e',
+  },
+  backupDotAmber: {
+    backgroundColor: '#f59e0b',
+  },
+  backupDotRed: {
+    backgroundColor: '#ef4444',
+  },
+  backupDotGray: {
+    backgroundColor: '#6b7280',
   },
 });

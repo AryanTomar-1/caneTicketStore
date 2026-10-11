@@ -26,12 +26,16 @@ import { sanitizeComment, sanitizeName, sanitizeQuantity, sanitizeRate, sanitize
 import { useMicPulse } from '../../hooks/useMicPulse';
 import { Ticket, MillPaymentSettings } from '../../types';
 import SeasonSelector from '../../components/SeasonSelector';
+import ProfileSidebar from '../../components/ProfileSidebar';
 import { useSeason } from '../../context/SeasonContext';
+import { useBackup } from '../../context/BackupContext';
 
 export default function DashboardScreen(): React.ReactElement {
   const insets = useSafeAreaInsets();
   const isFocused = useIsFocused();
   const { selectedSeason } = useSeason();
+  const { enqueueSave, enqueueDelete, syncState, settings: backupSettings } = useBackup();
+  const [showProfileSidebar, setShowProfileSidebar] = useState(false);
 
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [filtered, setFiltered] = useState<Ticket[]>([]);
@@ -47,6 +51,8 @@ export default function DashboardScreen(): React.ReactElement {
   const [selectedOwners, setSelectedOwners] = useState<string[]>([]);
   const [showOwnerModal, setShowOwnerModal] = useState(false);
   const [uniqueOwners, setUniqueOwners] = useState<string[]>([]);
+  const [filterPaymentStatus, setFilterPaymentStatus] = useState<'all' | 'paid' | 'pending'>('all');
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
 
   // ── Search Debounce & Filter Refs ──────────────────────────────────────────
   const searchDebounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -58,6 +64,8 @@ export default function DashboardScreen(): React.ReactElement {
   filterDateRef.current = filterDate;
   const selectedOwnersRef = useRef(selectedOwners);
   selectedOwnersRef.current = selectedOwners;
+  const filterPaymentStatusRef = useRef<'all' | 'paid' | 'pending'>('all');
+  filterPaymentStatusRef.current = filterPaymentStatus;
 
   // Clean up debounce timer on unmount
   useEffect(() => {
@@ -70,7 +78,12 @@ export default function DashboardScreen(): React.ReactElement {
 
   // ── Stats ──────────────────────────────────────────────────────────────────
   const totalQty = filtered.reduce((sum, t) => sum + (parseFloat(String(t.quantity)) || 0), 0);
-  const hasFilters = searchText || selectedNames.length > 0 || selectedOwners.length > 0 || filterDate;
+  const hasFilters =
+    searchText ||
+    selectedNames.length > 0 ||
+    selectedOwners.length > 0 ||
+    filterDate ||
+    filterPaymentStatus !== 'all';
 
   // ── Rate Management ───────────────────────────────────────────────────────
   const [pricePerQty, setPricePerQty] = useState<string>('');
@@ -80,6 +93,8 @@ export default function DashboardScreen(): React.ReactElement {
 
   // ── Mill Payment Settings ─────────────────────────────────────────────────
   const [millSettings, setMillSettings] = useState<MillPaymentSettings | null>(null);
+  const millSettingsRef = useRef<MillPaymentSettings | null>(null);
+  millSettingsRef.current = millSettings;
   const [showMillActionsSheet, setShowMillActionsSheet] = useState(false);
   const [showMillViewModal, setShowMillViewModal] = useState(false);
   const [showMillDateModal, setShowMillDateModal] = useState(false);
@@ -163,6 +178,7 @@ export default function DashboardScreen(): React.ReactElement {
     overrideSearch?: string,
     overrideNames?: string[],
     overrideDate?: string,
+    overridePaymentStatus?: 'all' | 'paid' | 'pending',
   ) => {
     if (searchDebounceTimer.current) {
       clearTimeout(searchDebounceTimer.current);
@@ -173,6 +189,7 @@ export default function DashboardScreen(): React.ReactElement {
     const searchToUse = overrideSearch ?? searchText;
     const namesToUse = overrideNames ?? selectedNames;
     const dateToUse = overrideDate ?? filterDate;
+    const paymentStatusToUse = overridePaymentStatus ?? filterPaymentStatusRef.current;
 
     // Always derive unique owners from ALL tickets
     setUniqueOwners([...new Set(allData.map(t => t.caneOwner).filter(Boolean))].sort());
@@ -184,12 +201,32 @@ export default function DashboardScreen(): React.ReactElement {
       : allData;
     setUniqueNames([...new Set(ownerBase.map(t => t.name))].sort());
 
-    applyFilters(allData, searchToUse, namesToUse, dateToUse, ownersToUse);
+    applyFilters(
+      allData,
+      searchToUse,
+      namesToUse,
+      dateToUse,
+      ownersToUse,
+      paymentStatusToUse,
+      millSettingsRef.current
+    );
   };
 
   const loadMillSettings = async () => {
     const s = await getMillPaymentSettings(selectedSeason);
     setMillSettings(s);
+    millSettingsRef.current = s;
+    if (filterPaymentStatusRef.current !== 'all') {
+      applyFilters(
+        ticketsRef.current,
+        searchText,
+        selectedNamesRef.current,
+        filterDateRef.current,
+        selectedOwnersRef.current,
+        filterPaymentStatusRef.current,
+        s
+      );
+    }
   };
 
   const loadRate = async () => {
@@ -219,19 +256,52 @@ export default function DashboardScreen(): React.ReactElement {
     names: string[],
     date: string,
     owners: string[],
+    paymentStatus: 'all' | 'paid' | 'pending' = filterPaymentStatusRef.current,
+    currentMillSettings: MillPaymentSettings | null = millSettingsRef.current,
   ) => {
     let result = [...data];
     if (owners.length > 0) result = result.filter(t => owners.includes(t.caneOwner));
     if (names.length > 0) result = result.filter(t => names.includes(t.name));
     if (search.trim()) {
-      const q = search.toLowerCase().trim();
-      result = result.filter(t =>
-        t.name?.toLowerCase().includes(q) ||
-        t.fatherName?.toLowerCase().includes(q) ||
-        t.farmer_code?.toLowerCase().includes(q)
+      const trimmedSearch = search.trim();
+      // Prefix matching for comment search in English & Hindi:
+      // "comment", "comments", "कमेंट", "कमेंट्स", "कमैंट", "टिप्पणी", "टिपण्णी"
+      const commentMatch = trimmedSearch.match(
+        /^(comment|comments|कमेंट|कमेंट्स|कमैंट|टिप्पणी|टिपण्णी)(?:[:\s\-,/]+(.*)|$)/i
       );
+
+      if (commentMatch) {
+        const commentQuery = (commentMatch[2] || '').toLowerCase().trim();
+        if (commentQuery) {
+          result = result.filter(t =>
+            Boolean(t.comment && t.comment.toLowerCase().includes(commentQuery))
+          );
+        } else {
+          // If only prefix is entered, show all records that have a comment
+          result = result.filter(t => Boolean(t.comment && t.comment.trim()));
+        }
+      } else {
+        // Normal search by name, father name, or farmer code
+        const q = trimmedSearch.toLowerCase();
+        result = result.filter(t =>
+          t.name?.toLowerCase().includes(q) ||
+          t.fatherName?.toLowerCase().includes(q) ||
+          t.farmer_code?.toLowerCase().includes(q)
+        );
+      }
     }
     if (date.trim()) result = result.filter(t => matchFilterDate(t.date, date.trim()));
+
+    // Payment Status Filter (बकाया या भुगतान)
+    if (paymentStatus === 'paid') {
+      result = result.filter(t =>
+        Boolean(currentMillSettings?.paidUntilDate && compareDDMMYYYY(t.date, currentMillSettings.paidUntilDate) <= 0)
+      );
+    } else if (paymentStatus === 'pending') {
+      result = result.filter(t =>
+        !currentMillSettings?.paidUntilDate || compareDDMMYYYY(t.date, currentMillSettings.paidUntilDate) > 0
+      );
+    }
     result.sort((a, b) => {
       const parseDate = (d: string) => {
         if (!d) return 0;
@@ -324,6 +394,20 @@ export default function DashboardScreen(): React.ReactElement {
     applyFilters(tickets, searchText, selectedNames, sanitized, selectedOwners);
   };
 
+  const handlePaymentStatusFilter = (status: 'all' | 'paid' | 'pending') => {
+    setFilterPaymentStatus(status);
+    filterPaymentStatusRef.current = status;
+    applyFilters(
+      ticketsRef.current,
+      searchText,
+      selectedNamesRef.current,
+      filterDateRef.current,
+      selectedOwnersRef.current,
+      status,
+      millSettingsRef.current
+    );
+  };
+
   const clearFilters = () => {
     if (searchDebounceTimer.current) {
       clearTimeout(searchDebounceTimer.current);
@@ -334,7 +418,10 @@ export default function DashboardScreen(): React.ReactElement {
     setFilterDate('');
     setTempDateFilter('');
     setSelectedOwners([]);
+    setFilterPaymentStatus('all');
+    filterPaymentStatusRef.current = 'all';
     setShowDateModal(false);
+    setShowPaymentModal(false);
     setFiltered(tickets);
   };
 
@@ -351,7 +438,20 @@ export default function DashboardScreen(): React.ReactElement {
     }
     try {
       await setMillPaymentSettings(selectedSeason, { paidUntilDate: millDateInput });
-      setMillSettings({ paidUntilDate: millDateInput });
+      const newSettings = { paidUntilDate: millDateInput };
+      setMillSettings(newSettings);
+      millSettingsRef.current = newSettings;
+      if (filterPaymentStatusRef.current !== 'all') {
+        applyFilters(
+          ticketsRef.current,
+          searchText,
+          selectedNamesRef.current,
+          filterDateRef.current,
+          selectedOwnersRef.current,
+          filterPaymentStatusRef.current,
+          newSettings
+        );
+      }
       setShowMillDateModal(false);
       setMillDateInput('');
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -370,6 +470,18 @@ export default function DashboardScreen(): React.ReactElement {
           text: 'हटाएं', style: 'destructive', onPress: async () => {
             await clearMillPaymentSettings(selectedSeason);
             setMillSettings(null);
+            millSettingsRef.current = null;
+            if (filterPaymentStatusRef.current !== 'all') {
+              applyFilters(
+                ticketsRef.current,
+                searchText,
+                selectedNamesRef.current,
+                filterDateRef.current,
+                selectedOwnersRef.current,
+                filterPaymentStatusRef.current,
+                null
+              );
+            }
             setShowMillActionsSheet(false);
             await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
           }
@@ -440,6 +552,7 @@ export default function DashboardScreen(): React.ReactElement {
           text: 'हटाएं', style: 'destructive', onPress: async () => {
             try {
               await deleteTicket(id);
+              enqueueDelete(id, selectedSeason || '').catch(() => {});
               await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
               loadData();
             } catch {
@@ -509,6 +622,7 @@ export default function DashboardScreen(): React.ReactElement {
         quantity: qtyNum,
         comment: comment.trim(),
       });
+      enqueueSave(editTicket.id, editTicket.seasonId || selectedSeason || '').catch(() => {});
       setEditTicket(null);
       await loadData();
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -636,8 +750,8 @@ export default function DashboardScreen(): React.ReactElement {
         {/* Comment if any */}
         {!!item.comment && (
           <View style={styles.commentRow}>
-            <Ionicons name="chatbubble-outline" size={12} color="#64748b" />
-            <Text style={styles.commentText} numberOfLines={2}>{item.comment}</Text>
+            <Ionicons name="chatbubble-outline" size={13} color="#f0a500" />
+            <Text style={styles.commentText} numberOfLines={3}>{item.comment}</Text>
           </View>
         )}
 
@@ -657,14 +771,42 @@ export default function DashboardScreen(): React.ReactElement {
             <SeasonSelector prefix="सीजन: " />
           </View>
         </View>
-        <TouchableOpacity
-          style={styles.backupBtn}
-          onPress={() => setShowBackupModal(true)}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="cloud-upload-outline" size={15} color="#a855f7" />
-          <Text style={styles.backupBtnText}>बैकअप</Text>
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <TouchableOpacity
+            style={styles.backupBtn}
+            onPress={() => setShowBackupModal(true)}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="cloud-upload-outline" size={15} color="#a855f7" />
+            <Text style={styles.backupBtnText}>बैकअप</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => setShowProfileSidebar(true)}
+            style={{ position: 'relative', padding: 2 }}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="person-circle-outline" size={26} color="#f0a500" />
+            {backupSettings.enabled && (
+              <View style={[
+                {
+                  position: 'absolute',
+                  top: 2,
+                  right: 2,
+                  width: 8,
+                  height: 8,
+                  borderRadius: 4,
+                  borderWidth: 1.5,
+                  borderColor: '#0d0d1a',
+                },
+                syncState.status === 'idle' ? { backgroundColor: '#22c55e' } :
+                syncState.status === 'syncing' || syncState.status === 'pending' ? { backgroundColor: '#f59e0b' } :
+                syncState.status === 'failed' || syncState.status === 'auth_required' ? { backgroundColor: '#ef4444' } :
+                { backgroundColor: '#6b7280' }
+              ]} />
+            )}
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* ── 2. SUMMARY CARDS: 3 horizontal cards ── */}
@@ -778,9 +920,9 @@ export default function DashboardScreen(): React.ReactElement {
           style={styles.searchInput}
           value={searchText}
           onChangeText={v => handleSearch(sanitizeSearchText(v))}
-          placeholder={isSearchListening ? 'सुन रहा है...' : 'नाम / किसान कोड खोजें...'}
+          placeholder={isSearchListening ? 'सुन रहा है...' : 'नाम / कोड / टिप्पणी खोजें...'}
           placeholderTextColor={isSearchListening ? '#ef4444' : '#64748b'}
-          maxLength={50}
+          maxLength={80}
           autoCorrect={false}
         />
         {searchText ? (
@@ -801,7 +943,14 @@ export default function DashboardScreen(): React.ReactElement {
           </View>
         </Animated.View>
       </View>
-      <Text style={styles.searchHelperText}>⚡ साइड दबाकर बोलें या तारीख/नाम से खोजें</Text>
+      <Text style={[
+        styles.searchHelperText,
+        /^(comment|comments|कमेंट|कमेंट्स|कमैंट|टिप्पणी|टिपण्णी)(?:[:\s\-,/]+(.*)|$)/i.test(searchText.trim()) && { color: '#06b6d4', fontWeight: '600' }
+      ]}>
+        {/^(comment|comments|कमेंट|कमेंट्स|कमैंट|टिप्पणी|टिपण्णी)(?:[:\s\-,/]+(.*)|$)/i.test(searchText.trim())
+          ? '💬 टिप्पणी / कमेंट सर्च मोड सक्रिय है'
+          : '⚡ नाम/कोड से खोजें, या कमेंट के लिए "comment/कमेंट <शब्द>" लिखें'}
+      </Text>
 
       {/* ── 6. FILTERS: मालिक, नाम चुनें, तारीख चुनें ── */}
       <View style={styles.filtersRow}>
@@ -851,6 +1000,66 @@ export default function DashboardScreen(): React.ReactElement {
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
               <Ionicons name="close-circle" size={13} color="#f0a500" />
+            </TouchableOpacity>
+          ) : (
+            <Ionicons name="chevron-down" size={12} color="#94a3b8" />
+          )}
+        </TouchableOpacity>
+
+        {/* Payment Status Filter Chip ("भुगतान स्थिति" / "बकाया" / "भुगतान प्राप्त") */}
+        <TouchableOpacity
+          style={[
+            styles.filterChip,
+            filterPaymentStatus === 'paid' && styles.filterChipActiveGreen,
+            filterPaymentStatus === 'pending' && styles.filterChipActiveAmber,
+          ]}
+          onPress={() => setShowPaymentModal(true)}
+          activeOpacity={0.7}
+        >
+          <Ionicons
+            name={
+              filterPaymentStatus === 'paid'
+                ? 'checkmark-circle'
+                : filterPaymentStatus === 'pending'
+                ? 'time-outline'
+                : 'cash-outline'
+            }
+            size={13}
+            color={
+              filterPaymentStatus === 'paid'
+                ? '#22c55e'
+                : filterPaymentStatus === 'pending'
+                ? '#f0a500'
+                : '#94a3b8'
+            }
+          />
+          <Text
+            style={[
+              styles.filterChipText,
+              filterPaymentStatus === 'paid' && { color: '#22c55e' },
+              filterPaymentStatus === 'pending' && { color: '#f0a500' },
+            ]}
+            numberOfLines={1}
+          >
+            {filterPaymentStatus === 'paid'
+              ? 'भुगतान प्राप्त'
+              : filterPaymentStatus === 'pending'
+              ? 'बकाया'
+              : 'भुगतान स्थिति'}
+          </Text>
+          {filterPaymentStatus !== 'all' ? (
+            <TouchableOpacity
+              onPress={(e) => {
+                e.stopPropagation();
+                handlePaymentStatusFilter('all');
+              }}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Ionicons
+                name="close-circle"
+                size={13}
+                color={filterPaymentStatus === 'paid' ? '#22c55e' : '#f0a500'}
+              />
             </TouchableOpacity>
           ) : (
             <Ionicons name="chevron-down" size={12} color="#94a3b8" />
@@ -1520,6 +1729,130 @@ export default function DashboardScreen(): React.ReactElement {
         </TouchableOpacity>
       </Modal>
 
+      {/* ══ 8. PAYMENT STATUS FILTER MODAL ("भुगतान या बकाया") ══ */}
+      <Modal
+        visible={showPaymentModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowPaymentModal(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalBackdrop}
+          activeOpacity={1}
+          onPress={() => setShowPaymentModal(false)}
+        >
+          <View style={styles.bottomSheetCard}>
+            <View style={styles.dragHandle} />
+            <View style={styles.sheetHeaderRow}>
+              <View style={styles.sheetTitleGroup}>
+                <View style={[styles.sheetIconCircle, { backgroundColor: 'rgba(34,197,94,0.15)' }]}>
+                  <Ionicons name="cash-outline" size={18} color="#22c55e" />
+                </View>
+                <Text style={styles.sheetTitle}>भुगतान स्थिति चुनें</Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setShowPaymentModal(false)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="close" size={22} color="#94a3b8" />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.sheetSubtitle}>
+              {millSettings?.paidUntilDate
+                ? `मिल भुगतान कट-ऑफ: ${millSettings.paidUntilDate} तक चुकता`
+                : 'पर्चियों को बकाया या भुगतान प्राप्त के अनुसार देखें'}
+            </Text>
+
+            <View style={{ gap: 8, marginVertical: 12 }}>
+              {/* Option 1: All tickets */}
+              <TouchableOpacity
+                style={[styles.pickerItem, filterPaymentStatus === 'all' && styles.pickerItemActive]}
+                onPress={() => {
+                  handlePaymentStatusFilter('all');
+                  setShowPaymentModal(false);
+                }}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.pickerAvatar, { backgroundColor: 'rgba(148,163,184,0.15)' }]}>
+                  <Ionicons name="receipt-outline" size={16} color="#94a3b8" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.pickerItemText, filterPaymentStatus === 'all' && { color: '#f0a500', fontWeight: '800' }]}>
+                    सभी पर्चियां (All)
+                  </Text>
+                  <Text style={styles.pickerItemSub}>कुल {tickets.length} पर्चियां</Text>
+                </View>
+                {filterPaymentStatus === 'all' && <Ionicons name="checkmark" size={18} color="#f0a500" />}
+              </TouchableOpacity>
+
+              {/* Option 2: Pending (बकाया) */}
+              <TouchableOpacity
+                style={[styles.pickerItem, filterPaymentStatus === 'pending' && styles.pickerItemActive]}
+                onPress={() => {
+                  handlePaymentStatusFilter('pending');
+                  setShowPaymentModal(false);
+                }}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.pickerAvatar, { backgroundColor: 'rgba(240,165,0,0.15)' }]}>
+                  <Ionicons name="time-outline" size={16} color="#f0a500" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.pickerItemText, filterPaymentStatus === 'pending' && { color: '#f0a500', fontWeight: '800' }]}>
+                    बकाया (Pending)
+                  </Text>
+                  <Text style={styles.pickerItemSub}>
+                    {tickets.filter(t => !millSettings?.paidUntilDate || compareDDMMYYYY(t.date, millSettings.paidUntilDate) > 0).length} पर्चियां भुगतान शेष हैं
+                  </Text>
+                </View>
+                <View style={[styles.pickerCheckbox, filterPaymentStatus === 'pending' && styles.pickerCheckboxActiveAmber]}>
+                  {filterPaymentStatus === 'pending' && <Ionicons name="checkmark" size={14} color="#fff" />}
+                </View>
+              </TouchableOpacity>
+
+              {/* Option 3: Paid (भुगतान प्राप्त) */}
+              <TouchableOpacity
+                style={[styles.pickerItem, filterPaymentStatus === 'paid' && styles.pickerItemActive]}
+                onPress={() => {
+                  handlePaymentStatusFilter('paid');
+                  setShowPaymentModal(false);
+                }}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.pickerAvatar, { backgroundColor: 'rgba(34,197,94,0.15)' }]}>
+                  <Ionicons name="checkmark-circle-outline" size={16} color="#22c55e" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.pickerItemText, filterPaymentStatus === 'paid' && { color: '#22c55e', fontWeight: '800' }]}>
+                    भुगतान प्राप्त (Paid)
+                  </Text>
+                  <Text style={styles.pickerItemSub}>
+                    {tickets.filter(t => Boolean(millSettings?.paidUntilDate && compareDDMMYYYY(t.date, millSettings.paidUntilDate) <= 0)).length} पर्चियां चुकता हो चुकी हैं
+                  </Text>
+                </View>
+                <View style={[styles.pickerCheckbox, filterPaymentStatus === 'paid' && { backgroundColor: '#22c55e', borderColor: '#22c55e' }]}>
+                  {filterPaymentStatus === 'paid' && <Ionicons name="checkmark" size={14} color="#fff" />}
+                </View>
+              </TouchableOpacity>
+            </View>
+
+            {!millSettings?.paidUntilDate && (
+              <View style={[styles.hintNotice, { marginBottom: 12 }]}>
+                <Ionicons name="information-circle-outline" size={14} color="#f0a500" />
+                <Text style={styles.hintNoticeText}>
+                  नोट: मिल भुगतान कट-ऑफ तारीख सेट नहीं है। ऊपर "मिल भुगतान" कार्ड से कट-ऑफ तारीख सेट कर सकते हैं।
+                </Text>
+              </View>
+            )}
+
+            <TouchableOpacity style={styles.sheetConfirmBtn} onPress={() => setShowPaymentModal(false)}>
+              <Text style={styles.sheetConfirmBtnText}>बंद करें</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
       {/* ══ 8. BACKUP & RESTORE MODAL ══ */}
       <Modal visible={showBackupModal} transparent animationType="slide" onRequestClose={() => { if (!backupLoading) setShowBackupModal(false); }}>
         <TouchableOpacity
@@ -1558,6 +1891,27 @@ export default function DashboardScreen(): React.ReactElement {
                 <Text style={styles.backupLoadingRowText}>प्रतीक्षा करें...</Text>
               </View>
             )}
+
+            {/* Google Drive Cloud Backup Tile */}
+            <TouchableOpacity
+              style={[styles.backupActionTile, { backgroundColor: 'rgba(66,133,244,0.12)', borderColor: 'rgba(66,133,244,0.4)', marginBottom: 10 }]}
+              onPress={() => {
+                setShowBackupModal(false);
+                setShowProfileSidebar(true);
+              }}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="logo-google" size={22} color="#4285F4" />
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.backupActionTileTitle, { color: '#4285F4' }]}>Google Drive ऑटो बैकअप</Text>
+                <Text style={styles.backupActionTileSub}>
+                  {backupSettings.enabled
+                    ? `सक्रिय (${backupSettings.googleEmail || 'Google Drive'})`
+                    : 'सेटअप करें — क्लाउड पर सुरक्षित रखें'}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color="#4285F4" />
+            </TouchableOpacity>
 
             <TouchableOpacity
               style={[styles.backupActionTile, { backgroundColor: 'rgba(168,85,247,0.12)', borderColor: 'rgba(168,85,247,0.4)' }]}
@@ -1789,6 +2143,9 @@ export default function DashboardScreen(): React.ReactElement {
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      {/* Profile / Backup Sidebar Drawer */}
+      <ProfileSidebar visible={showProfileSidebar} onClose={() => setShowProfileSidebar(false)} />
     </View>
   );
 }
@@ -2323,8 +2680,9 @@ const styles = StyleSheet.create({
   },
   commentText: {
     flex: 1,
-    color: '#94a3b8',
+    color: '#e2e8f0',
     fontSize: 12,
+    fontWeight: '700',
     lineHeight: 16,
   },
   ticketTime: {
