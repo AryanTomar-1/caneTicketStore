@@ -11,7 +11,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import {
   View, Text, StyleSheet, TouchableOpacity, Modal, Animated,
-  ScrollView, ActivityIndicator, Alert,
+  ScrollView, ActivityIndicator, Alert, Share,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -140,6 +140,25 @@ export default function ProfileSidebar({ visible, onClose, onDataRestored }: Pro
       case "auth_required": return { icon: "key-outline", color: "#f0a500", label: "Re-connect Zaroori", sublabel: "Google account ko dobara connect karein" };
       case "idle": return { icon: "cloud-done-outline", color: "#22c55e", label: "Backup: On ✅", sublabel: settings.lastBackupAt ? `Last: ${formatDateTime(settings.lastBackupAt)}` : "Active" };
       default: return { icon: "cloud-outline", color: "#94a3b8", label: "Backup: Checking...", sublabel: "" };
+    }
+  };
+
+  // ── Share App ─────────────────────────────────────────────────────────────
+  const handleShareApp = async () => {
+    const PLAY_STORE_URL = 'https://play.google.com/store/apps/details?id=com.aryan_tomar.SmartKissan';
+    try {
+      await Share.share({
+        message:
+          `🌾 *Smart Kissan - गन्ना पर्ची और वजन रिकॉर्ड ऐप*\n\n` +
+          `गन्ना किसानों के लिए पर्ची और वजन का सटीक हिसाब रखने का सबसे आसान ऐप।\n\n` +
+          `✅ पर्ची रिकॉर्ड करें\n` +
+          `✅ बोलकर (Voice) तुरंत एंट्री करें\n` +
+          `✅ Google Drive पर सुरक्षित बैकअप रखें\n\n` +
+          `📲 किसान भाई अभी डाउनलोड करें:\n` +
+          `👉 ${PLAY_STORE_URL}`,
+      });
+    } catch (e) {
+      console.warn('Share error:', e);
     }
   };
 
@@ -283,6 +302,14 @@ export default function ProfileSidebar({ visible, onClose, onDataRestored }: Pro
                   </TouchableOpacity>
                 </>
               )}
+
+              {/* Share App with other farmers */}
+              <View style={styles.divider} />
+              <TouchableOpacity style={styles.actionBtn} onPress={handleShareApp} activeOpacity={0.8}>
+                <Ionicons name="share-social-outline" size={18} color="#22c55e" />
+                <Text style={styles.actionBtnText}>किसान भाइयों को शेयर करें</Text>
+                <Ionicons name="chevron-forward" size={16} color="#64748b" />
+              </TouchableOpacity>
 
               {/* Divider */}
               <View style={styles.divider} />
